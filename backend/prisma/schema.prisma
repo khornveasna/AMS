@@ -1,0 +1,161 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  ADMIN
+  EMPLOYEE
+}
+
+enum AttendanceStatus {
+  ON_TIME
+  LATE
+  ABSENT
+}
+
+model Department {
+  id            String             @id @default(uuid())
+  name          String             @unique
+  employees     Employee[]
+  createdAt     DateTime           @default(now())
+  movementsFrom EmployeeMovement[] @relation("FromDepartment")
+  movementsTo   EmployeeMovement[] @relation("ToDepartment")
+}
+
+model Employee {
+  id               String             @id @default(uuid())
+  employeeIdCode   String?            @unique
+  photo            String?            @db.Text
+  name             String
+  email            String             @unique
+  password         String
+  role             Role               @default(EMPLOYEE)
+  gender           String?
+  nationality      String?
+  phone            String?
+  jobTitle         String?
+  dob              String?
+  dateOfEmployment String?
+  departmentId     String
+  department       Department         @relation(fields: [departmentId], references: [id])
+  branchId         String?
+  branch           Branch?            @relation(fields: [branchId], references: [id], onDelete: SetNull)
+  schedules        Schedule[]
+  attendances      Attendance[]
+  movements        EmployeeMovement[]
+  createdAt        DateTime           @default(now())
+}
+
+model EmployeeMovement {
+  id             String      @id @default(uuid())
+  employeeId     String
+  employee       Employee    @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  fromDeptId     String?
+  fromDepartment Department? @relation("FromDepartment", fields: [fromDeptId], references: [id], onDelete: SetNull)
+  toDeptId       String
+  toDepartment   Department  @relation("ToDepartment", fields: [toDeptId], references: [id], onDelete: Cascade)
+  movedAt        DateTime    @default(now())
+}
+
+model Shift {
+  id            String              @id @default(uuid())
+  name          String              // e.g. "Morning Shift"
+  startTime     String              // "08:00"
+  endTime       String              // "17:00"
+  gracePeriod   Int                 @default(15)
+  schedules     Schedule[]
+  dayTimetables ShiftDayTimetable[]
+}
+
+model ShiftDayTimetable {
+  id          String    @id @default(uuid())
+  shiftId     String
+  dayOfWeek   Int       // 0 = Sunday, 1 = Monday ... 6 = Saturday
+  timetableId String
+  shift       Shift     @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+  timetable   Timetable @relation(fields: [timetableId], references: [id], onDelete: Cascade)
+}
+
+model Timetable {
+  id            String              @id @default(uuid())
+  name          String
+  onDutyTime    String              // e.g. "08:00"
+  offDutyTime   String              // e.g. "12:00"
+  beginningIn   String              // e.g. "07:00"
+  endingIn      String              // e.g. "09:00"
+  beginningOut  String              // e.g. "11:00"
+  endingOut     String              // e.g. "13:00"
+  lateTime      Int                 @default(1)
+  leaveEarly    Int                 @default(1)
+  workdayCount  Float               @default(1.0)
+  color         String              @default("#3b82f6")
+  mustIn        Boolean             @default(true)
+  mustOut       Boolean             @default(true)
+  shifts        ShiftDayTimetable[]
+  attendances   Attendance[]
+}
+
+model Schedule {
+  id         String   @id @default(uuid())
+  employeeId String
+  shiftId    String
+  date       DateTime
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift      Shift    @relation(fields: [shiftId], references: [id], onDelete: Cascade)
+}
+
+model Attendance {
+  id          String           @id @default(uuid())
+  employeeId  String
+  checkIn     DateTime         @default(now())
+  checkOut    DateTime?
+  latitude    Float
+  longitude   Float
+  distance    Float
+  status      AttendanceStatus @default(ON_TIME)
+  timetableId String?
+  branchId    String?
+  employee    Employee         @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  timetable   Timetable?       @relation(fields: [timetableId], references: [id], onDelete: SetNull)
+  branch      Branch?          @relation(fields: [branchId], references: [id], onDelete: SetNull)
+}
+
+model Branch {
+  id          String       @id @default(uuid())
+  name        String       @unique
+  latitude    Float
+  longitude   Float
+  radius      Float        @default(50)
+  qrCodeKey   String       @unique
+  createdAt   DateTime     @default(now())
+  attendances Attendance[]
+  employees   Employee[]
+}
+
+model Maintenance {
+  id        String   @id @default(uuid())
+  startTime DateTime
+  endTime   DateTime
+  reason    String?
+}
+
+model SystemSetting {
+  id    String @id @default(uuid())
+  key   String @unique
+  value String
+}
+
+model ScanFailure {
+  id           String   @id @default(uuid())
+  employeeId   String?
+  employeeName String?
+  reason       String
+  latitude     Float
+  longitude    Float
+  createdAt    DateTime @default(now())
+}

@@ -1,0 +1,16 @@
+{
+  "name": "attendance-management-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Enterprise Attendance Management System",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "start": "node scripts/start.js",
+    "down": "docker compose down",
+    "backend:dev": "npm run dev --workspace=backend",
+    "frontend:dev": "npm run dev --workspace=frontend"
+  }
+}
