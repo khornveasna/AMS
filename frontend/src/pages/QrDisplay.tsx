@@ -73,7 +73,7 @@ export default function QrDisplay() {
       const recent = historyRes.data.slice(0, 5).map((log: any) => ({
         id: log.id,
         employeeName: log.employee.name,
-        time: new Date(log.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        time: new Date(log.checkIn).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }),
         type: log.checkOut ? 'CHECK OUT' : 'CHECK IN',
         status: log.status
       }));

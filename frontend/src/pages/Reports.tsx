@@ -560,7 +560,7 @@ export default function Reports() {
                       <tr key={ex.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                         <td className="py-3 px-3 font-semibold text-slate-800 text-xs">{ex.employeeName}</td>
                         <td className="py-3 px-3 text-slate-655 text-xs">{ex.departmentName}</td>
-                        <td className="py-3 px-3 text-slate-655 text-xs">{new Date(ex.checkIn).toLocaleString()}</td>
+                        <td className="py-3 px-3 text-slate-655 text-xs">{new Date(ex.checkIn).toLocaleString([], { hour12: false })}</td>
                         <td className="py-3 px-3 text-xs">
                           <span className="px-2 py-0.5 bg-rose-50 border border-rose-100 text-rose-600 font-bold rounded-full text-[9px] uppercase">
                             {ex.type}
@@ -692,7 +692,7 @@ export default function Reports() {
                     {paginatedMiscExceptions.map((ex) => (
                        <tr key={ex.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                           <td className="py-3 px-3 font-semibold text-slate-800 text-xs">{ex.employeeName}</td>
-                          <td className="py-3 px-3 text-slate-655 text-xs">{new Date(ex.date).toLocaleString()}</td>
+                          <td className="py-3 px-3 text-slate-655 text-xs">{new Date(ex.date).toLocaleString([], { hour12: false })}</td>
                           <td className="py-3 px-3 text-xs font-bold text-slate-500">{ex.type}</td>
                           <td className="py-3 px-3 font-mono text-[10px] text-slate-600">{ex.gps}</td>
                           <td className="py-3 px-3 text-rose-600 text-xs font-semibold max-w-sm">{ex.details}</td>
@@ -799,8 +799,8 @@ export default function Reports() {
                             {new Date(ot.date).toLocaleDateString([], { dateStyle: 'medium' })}
                           </td>
                           <td className="py-3 px-3 text-[10px] text-slate-655 leading-relaxed font-semibold">
-                            IN: {new Date(ot.checkIn).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} <br/>
-                            OUT: {new Date(ot.checkOut).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                            IN: {new Date(ot.checkIn).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', hour12: false})} <br/>
+                            OUT: {new Date(ot.checkOut).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', hour12: false})}
                           </td>
                           <td className="py-3 px-3 text-slate-650 text-xs font-bold">{ot.shiftEnd}</td>
                           <td className="py-3 px-3 text-right text-indigo-600 font-black text-xs">+{ot.otHours} hrs</td>
@@ -853,8 +853,8 @@ export default function Reports() {
                             {new Date(log.date).toLocaleDateString([], { dateStyle: 'medium' })}
                           </td>
                           <td className="py-3 px-3 text-[10px] text-slate-600 font-semibold leading-relaxed">
-                            IN: {new Date(log.checkIn).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})} <br/>
-                            OUT: {log.checkOut ? `OUT: ${new Date(log.checkOut).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}` : 'Pending'}
+                            IN: {new Date(log.checkIn).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', hour12: false})} <br/>
+                            OUT: {log.checkOut ? `OUT: ${new Date(log.checkOut).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', hour12: false})}` : 'Pending'}
                           </td>
                           <td className="py-3 px-3 text-right text-slate-655 text-xs font-bold">{log.distance}m</td>
                        </tr>

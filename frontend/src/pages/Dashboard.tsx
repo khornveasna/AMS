@@ -178,7 +178,7 @@ export default function Dashboard() {
                     <tr key={log.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                       <td className="py-3 px-3 font-semibold text-slate-850 text-xs">{log.employeeName}</td>
                       <td className="py-3 px-3 text-slate-600 text-xs">
-                        {new Date(log.checkIn).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
+                        {new Date(log.checkIn).toLocaleString([], { dateStyle: 'short', timeStyle: 'short', hour12: false })}
                       </td>
                       <td className="py-3 px-3 text-xs">
                         <span className={`px-2 py-0.5 rounded-full font-bold text-[10px] ${

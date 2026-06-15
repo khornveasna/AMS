@@ -739,10 +739,10 @@ export default function ScanHub() {
                       {log.employee?.name || 'Unknown'}
                     </td>
                     <td className="py-3 px-3 text-slate-600 text-xs">
-                      {new Date(log.checkIn).toLocaleString()}
+                      {new Date(log.checkIn).toLocaleString([], { hour12: false })}
                     </td>
                     <td className="py-3 px-3 text-slate-600 text-xs">
-                      {log.checkOut ? new Date(log.checkOut).toLocaleString() : (
+                      {log.checkOut ? new Date(log.checkOut).toLocaleString([], { hour12: false }) : (
                         <span className="text-slate-400 italic">No checkout yet</span>
                       )}
                     </td>
@@ -797,7 +797,7 @@ export default function ScanHub() {
               {successData?.attendance && (
                 <div className="flex justify-between items-center text-[11px] pt-2 border-t border-slate-200/60 text-slate-500 font-medium">
                   <span>ចម្ងាយ៖ {successData?.distance != null ? Math.round(successData.distance) : 0} ម៉ែត្រ</span>
-                  <span>ម៉ោង៖ {new Date(successData.attendance.checkIn).toLocaleTimeString()}</span>
+                  <span>ម៉ោង៖ {new Date(successData.attendance.checkIn).toLocaleTimeString([], { hour12: false })}</span>
                 </div>
               )}
             </div>

@@ -222,7 +222,7 @@ export default function Departments() {
                       </div>
                     </td>
                     <td className="py-3 px-3 text-slate-650 text-xs">
-                      {new Date(log.movedAt).toLocaleString()}
+                      {new Date(log.movedAt).toLocaleString([], { hour12: false })}
                     </td>
                   </tr>
                 ))}
