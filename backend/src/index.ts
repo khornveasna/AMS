@@ -1445,10 +1445,21 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
   try {
     // 1. Fetch Core Data
     const employees = await prisma.employee.findMany({ include: { department: true } });
-    const schedules = await prisma.schedule.findMany({ include: { shift: true } });
+    const schedules = await prisma.schedule.findMany({
+      include: {
+        shift: {
+          include: {
+            dayTimetables: {
+              include: { timetable: true }
+            }
+          }
+        }
+      }
+    });
     const attendances = await prisma.attendance.findMany({
       include: {
-        employee: { select: { name: true, email: true, department: { select: { name: true } } } }
+        employee: { select: { name: true, email: true, department: { select: { name: true } } } },
+        timetable: true
       }
     });
     const scanFailures = await prisma.scanFailure.findMany();
@@ -1491,6 +1502,11 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
 
       const schedDate = new Date(sched.date);
       const schedDateStr = schedDate.toDateString();
+      const dayOfWeek = schedDate.getDay();
+
+      // Find timetables for this day of week under this shift
+      const dayTimetables = sched.shift.dayTimetables.filter(dt => dt.dayOfWeek === dayOfWeek);
+      if (dayTimetables.length === 0) return; // Off day
 
       // Find attendance for this employee on this date
       const attForDay = attendances.filter(att => {
@@ -1498,55 +1514,55 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
         return att.employeeId === sched.employeeId && attDate.toDateString() === schedDateStr;
       });
 
-      if (attForDay.length === 0) {
-        // ABSENT (only log if the scheduled day is in the past)
-        if (schedDate < todayStart) {
-          shiftExceptions.push({
-            id: `absent-${sched.id}`,
-            employeeIdCode: emp.employeeIdCode || 'N/A',
-            employeeName: emp.name,
-            departmentName: emp.department.name,
-            date: sched.date,
-            timetable: sched.shift.name,
-            onDuty: sched.shift.startTime,
-            offDuty: sched.shift.endTime,
-            clockIn: 'N/A',
-            clockOut: 'N/A',
-            late: '-',
-            early: '-',
-            absent: 'Yes',
-            workTime: '-',
-            type: 'ABSENT',
-            details: `Scheduled for ${sched.shift.name} (${sched.shift.startTime} - ${sched.shift.endTime}) but did not scan.`
-          });
-        }
-      } else {
-        // Checked in, let's check for Late and Early checkout exceptions
-        attForDay.forEach(att => {
+      dayTimetables.forEach(dt => {
+        const tt = dt.timetable;
+        const att = attForDay.find(a => a.timetableId === tt.id);
+
+        if (!att) {
+          // ABSENT for this timetable (only log if scheduled day/time has passed)
+          if (schedDate < todayStart) {
+            shiftExceptions.push({
+              id: `absent-${sched.id}-${tt.id}`,
+              employeeIdCode: emp.employeeIdCode || 'N/A',
+              employeeName: emp.name,
+              departmentName: emp.department.name,
+              date: sched.date,
+              timetable: `${sched.shift.name} (${tt.name})`,
+              onDuty: tt.onDutyTime,
+              offDuty: tt.offDutyTime,
+              clockIn: 'N/A',
+              clockOut: 'N/A',
+              late: '-',
+              early: '-',
+              absent: 'Yes',
+              workTime: '-',
+              type: 'ABSENT',
+              details: `Scheduled for ${sched.shift.name} - ${tt.name} (${tt.onDutyTime} - ${tt.offDutyTime}) but did not scan.`
+            });
+          }
+        } else {
+          // Checked in for this timetable, check for late/early leave
           const checkInDate = new Date(att.checkIn);
           const khCheckIn = getCambodiaTime(checkInDate);
           const checkInMin = khCheckIn.getUTCHours() * 60 + khCheckIn.getUTCMinutes();
-          const shiftStartMin = parseTimeStr(sched.shift.startTime);
-          
-          // Calculate late minutes (allow grace period)
+          const shiftStartMin = parseTimeStr(tt.onDutyTime);
+
           const rawLateMin = checkInMin - shiftStartMin;
-          const lateMin = rawLateMin > sched.shift.gracePeriod ? rawLateMin : 0;
+          const lateMin = rawLateMin > tt.lateTime ? rawLateMin : 0;
           const lateStr = lateMin > 0 ? `${lateMin} mins` : '-';
 
-          // Calculate early minutes
           let earlyMin = 0;
           let clockOutStr = 'N/A';
           if (att.checkOut) {
             const checkOutDate = new Date(att.checkOut);
             const khCheckOut = getCambodiaTime(checkOutDate);
             const checkOutMin = khCheckOut.getUTCHours() * 60 + khCheckOut.getUTCMinutes();
-            const shiftEndMin = parseTimeStr(sched.shift.endTime);
+            const shiftEndMin = parseTimeStr(tt.offDutyTime);
             earlyMin = Math.max(0, shiftEndMin - checkOutMin);
             clockOutStr = formatCambodiaTime(checkOutDate);
           }
           const earlyStr = earlyMin > 0 ? `${earlyMin} mins` : '-';
 
-          // Check if there is an exception (either late or left early)
           const isLate = lateMin > 0 || att.status === AttendanceStatus.LATE;
           const isEarly = earlyMin > 0;
 
@@ -1567,9 +1583,9 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
               employeeName: emp.name,
               departmentName: emp.department.name,
               date: att.checkIn,
-              timetable: sched.shift.name,
-              onDuty: sched.shift.startTime,
-              offDuty: sched.shift.endTime,
+              timetable: `${sched.shift.name} (${tt.name})`,
+              onDuty: tt.onDutyTime,
+              offDuty: tt.offDutyTime,
               clockIn: formatCambodiaTime(checkInDate),
               clockOut: clockOutStr,
               late: lateStr,
@@ -1581,11 +1597,11 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
                 ? `Late by ${lateMin}m and left early by ${earlyMin}m.` 
                 : isLate 
                   ? `Arrived late at ${formatCambodiaTime(checkInDate)}.`
-                  : `Left early at ${formatCambodiaTime(att.checkOut!)} (Shift end: ${sched.shift.endTime}).`
+                  : `Left early at ${formatCambodiaTime(att.checkOut!)} (Shift end: ${tt.offDutyTime}).`
             });
           }
-        });
-      }
+        }
+      });
     });
 
     // ------------------------------------------------------------------
