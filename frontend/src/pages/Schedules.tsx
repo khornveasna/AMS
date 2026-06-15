@@ -149,6 +149,15 @@ export default function Schedules() {
   const [bulkSchedules, setBulkSchedules] = useState<Schedule[]>([]);
   const [newShiftId, setNewShiftId] = useState('');
 
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
+  // Reset page when filter inputs change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [previewEmployeeId, selectedDeptId, previewMonth, previewYear]);
+
   const fetchSchedules = async (year: number, month: number, startStr?: string, endStr?: string) => {
     try {
       const pStart = new Date(year, month, 1);
@@ -1310,73 +1319,131 @@ export default function Schedules() {
                     </tr>
                   </thead>
                   <tbody>
-                    {getEmployeeCalendarData().map((sched) => {
-                      const dateObj = new Date(sched.date);
-                      const dayOfWeekNum = dateObj.getDay();
-                      const dayTimetablesForDay = sched.shift.dayTimetables.filter(dt => dt.dayOfWeek === dayOfWeekNum);
+                    {(() => {
+                      const allData = getEmployeeCalendarData();
+                      const paginatedData = allData.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
-                      return (
-                        <tr key={sched.id} className="border-b border-slate-100 hover:bg-slate-50/50 transition-colors">
-                          {previewEmployeeId === 'all' && (
-                            <td className="py-3 px-3 font-extrabold text-slate-800 text-xs">
-                              {sched.employee.name} ({sched.employee.employeeIdCode || 'No ID'})
+                      if (allData.length === 0) {
+                        return (
+                          <tr>
+                            <td colSpan={previewEmployeeId === 'all' ? 5 : 4} className="py-8 text-center text-slate-400 text-xs font-semibold">
+                              No schedule calendar assignments found for this employee.
                             </td>
-                          )}
-                          <td className="py-3 px-3 font-semibold text-slate-800 text-xs">
-                            {dateObj.toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' })}
-                          </td>
-                          <td className="py-3 px-3 text-xs">
-                            <span className="font-bold text-blue-600 bg-blue-50 px-2.5 py-0.5 rounded-full">
-                              {sched.shift.name}
-                            </span>
-                          </td>
-                          <td className="py-3 px-3">
-                            <div className="flex flex-wrap gap-1.5">
-                              {dayTimetablesForDay.map((dt, idx) => (
-                                <span 
-                                  key={idx} 
-                                  className="text-[10px] font-black px-2 py-0.5 rounded text-white shadow-sm flex items-center gap-1"
-                                  style={{ backgroundColor: dt.timetable.color }}
+                          </tr>
+                        );
+                      }
+
+                      return paginatedData.map((sched) => {
+                        const dateObj = new Date(sched.date);
+                        const dayOfWeekNum = dateObj.getDay();
+                        const dayTimetablesForDay = sched.shift.dayTimetables.filter(dt => dt.dayOfWeek === dayOfWeekNum);
+
+                        return (
+                          <tr key={sched.id} className="border-b border-slate-100 hover:bg-slate-50/50 transition-colors">
+                            {previewEmployeeId === 'all' && (
+                              <td className="py-3 px-3 font-extrabold text-slate-800 text-xs">
+                                {sched.employee.name} ({sched.employee.employeeIdCode || 'No ID'})
+                              </td>
+                            )}
+                            <td className="py-3 px-3 font-semibold text-slate-800 text-xs">
+                              {dateObj.toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'short', day: 'numeric' })}
+                            </td>
+                            <td className="py-3 px-3 text-xs">
+                              <span className="font-bold text-blue-600 bg-blue-50 px-2.5 py-0.5 rounded-full">
+                                {sched.shift.name}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3">
+                              <div className="flex flex-wrap gap-1.5">
+                                {dayTimetablesForDay.map((dt, idx) => (
+                                  <span 
+                                    key={idx} 
+                                    className="text-[10px] font-black px-2 py-0.5 rounded text-white shadow-sm flex items-center gap-1"
+                                    style={{ backgroundColor: dt.timetable.color }}
+                                  >
+                                    {dt.timetable.name} ({dt.timetable.onDutyTime} - {dt.timetable.offDutyTime})
+                                  </span>
+                                ))}
+                                {dayTimetablesForDay.length === 0 && (
+                                  <span className="text-[10px] font-bold text-slate-400 italic">Off-day / សម្រាក</span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="py-3 px-3 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button 
+                                  onClick={() => handleOpenEditModal(sched)}
+                                  className="p-1 text-slate-400 hover:text-blue-600 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+                                  title="កែប្រែ / Edit"
                                 >
-                                  {dt.timetable.name} ({dt.timetable.onDutyTime} - {dt.timetable.offDutyTime})
-                                </span>
-                              ))}
-                              {dayTimetablesForDay.length === 0 && (
-                                <span className="text-[10px] font-bold text-slate-400 italic">Off-day / សម្រាក</span>
-                              )}
-                            </div>
-                          </td>
-                          <td className="py-3 px-3 text-right">
-                            <div className="flex items-center justify-end gap-1.5">
-                              <button 
-                                onClick={() => handleOpenEditModal(sched)}
-                                className="p-1 text-slate-400 hover:text-blue-600 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
-                                title="កែប្រែ / Edit"
-                              >
-                                <Edit2 size={13} />
-                              </button>
-                              <button 
-                                onClick={() => handleDeleteSchedule(sched.id)}
-                                className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
-                                title="លុប / Delete"
-                              >
-                                <Trash2 size={13} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })}
-                    {getEmployeeCalendarData().length === 0 && (
-                      <tr>
-                        <td colSpan={previewEmployeeId === 'all' ? 5 : 4} className="py-8 text-center text-slate-400 text-xs font-semibold">
-                          No schedule calendar assignments found for this employee.
-                        </td>
-                      </tr>
-                    )}
+                                  <Edit2 size={13} />
+                                </button>
+                                <button 
+                                  onClick={() => handleDeleteSchedule(sched.id)}
+                                  className="p-1 text-slate-400 hover:text-rose-600 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+                                  title="លុប / Delete"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      });
+                    })()}
                   </tbody>
                 </table>
               </div>
+
+              {/* Pagination UI */}
+              {(() => {
+                const allData = getEmployeeCalendarData();
+                const totalPages = Math.ceil(allData.length / pageSize);
+                if (totalPages <= 1) return null;
+
+                return (
+                  <div className="flex items-center justify-between border-t border-slate-100 pt-4 mt-4 flex-wrap gap-2 text-xs font-bold text-slate-500">
+                    <div className="flex items-center gap-2">
+                      <span>Show</span>
+                      <select
+                        value={pageSize}
+                        onChange={(e) => {
+                          setPageSize(Number(e.target.value));
+                          setCurrentPage(1);
+                        }}
+                        className="bg-slate-50 border border-slate-200 rounded-lg py-1 px-2 text-slate-700 focus:outline-none cursor-pointer"
+                      >
+                        {[10, 20, 50, 100].map(size => (
+                          <option key={size} value={size}>{size} entries</option>
+                        ))}
+                      </select>
+                      <span>per page</span>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        disabled={currentPage === 1}
+                        onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+                        className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 hover:bg-slate-100 disabled:opacity-50 text-slate-700 font-bold rounded-lg transition-all cursor-pointer"
+                      >
+                        Previous
+                      </button>
+                      <span className="px-3 py-1.5 bg-blue-50 border border-blue-100 text-blue-600 rounded-lg">
+                        Page {currentPage} of {totalPages}
+                      </span>
+                      <button
+                        type="button"
+                        disabled={currentPage === totalPages}
+                        onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+                        className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 hover:bg-slate-100 disabled:opacity-50 text-slate-700 font-bold rounded-lg transition-all cursor-pointer"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           )}
         </div>
