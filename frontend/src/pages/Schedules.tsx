@@ -718,8 +718,11 @@ export default function Schedules() {
                     <div className="flex flex-col gap-1.5">
                       <label className="text-slate-600 font-bold text-xs">On Duty Time</label>
                       <input
-                        type="time"
+                        type="text"
                         required
+                        placeholder="HH:mm (e.g. 13:30)"
+                        pattern="^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$"
+                        title="Format: HH:mm (24-hour), e.g. 13:30"
                         value={ttOnDuty}
                         onChange={(e) => setTtOnDuty(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:outline-none rounded-xl p-2 text-xs text-slate-850 font-semibold"
@@ -728,8 +731,11 @@ export default function Schedules() {
                     <div className="flex flex-col gap-1.5">
                       <label className="text-slate-600 font-bold text-xs">Off Duty Time</label>
                       <input
-                        type="time"
+                        type="text"
                         required
+                        placeholder="HH:mm (e.g. 17:00)"
+                        pattern="^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$"
+                        title="Format: HH:mm (24-hour), e.g. 17:00"
                         value={ttOffDuty}
                         onChange={(e) => setTtOffDuty(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:outline-none rounded-xl p-2 text-xs text-slate-850 font-semibold"
@@ -741,8 +747,11 @@ export default function Schedules() {
                     <div className="flex flex-col gap-1.5">
                       <label className="text-slate-550 font-bold text-[11px] uppercase">Beginning Check-In</label>
                       <input
-                        type="time"
+                        type="text"
                         required
+                        placeholder="HH:mm (e.g. 06:00)"
+                        pattern="^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$"
+                        title="Format: HH:mm (24-hour), e.g. 06:00"
                         value={ttBeginningIn}
                         onChange={(e) => setTtBeginningIn(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:outline-none rounded-xl p-2 text-xs text-slate-850 font-semibold"
@@ -751,8 +760,11 @@ export default function Schedules() {
                     <div className="flex flex-col gap-1.5">
                       <label className="text-slate-550 font-bold text-[11px] uppercase">Ending Check-In</label>
                       <input
-                        type="time"
+                        type="text"
                         required
+                        placeholder="HH:mm (e.g. 08:00)"
+                        pattern="^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$"
+                        title="Format: HH:mm (24-hour), e.g. 08:00"
                         value={ttEndingIn}
                         onChange={(e) => setTtEndingIn(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:outline-none rounded-xl p-2 text-xs text-slate-850 font-semibold"
@@ -764,8 +776,11 @@ export default function Schedules() {
                     <div className="flex flex-col gap-1.5">
                       <label className="text-slate-550 font-bold text-[11px] uppercase">Beginning Check-Out</label>
                       <input
-                        type="time"
+                        type="text"
                         required
+                        placeholder="HH:mm (e.g. 11:00)"
+                        pattern="^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$"
+                        title="Format: HH:mm (24-hour), e.g. 11:00"
                         value={ttBeginningOut}
                         onChange={(e) => setTtBeginningOut(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:outline-none rounded-xl p-2 text-xs text-slate-850 font-semibold"
@@ -774,8 +789,11 @@ export default function Schedules() {
                     <div className="flex flex-col gap-1.5">
                       <label className="text-slate-550 font-bold text-[11px] uppercase">Ending Check-Out</label>
                       <input
-                        type="time"
+                        type="text"
                         required
+                        placeholder="HH:mm (e.g. 12:00)"
+                        pattern="^(0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$"
+                        title="Format: HH:mm (24-hour), e.g. 12:00"
                         value={ttEndingOut}
                         onChange={(e) => setTtEndingOut(e.target.value)}
                         className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 focus:outline-none rounded-xl p-2 text-xs text-slate-850 font-semibold"
