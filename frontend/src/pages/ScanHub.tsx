@@ -490,35 +490,38 @@ export default function ScanHub() {
         </p>
       </div>
 
-      {/* Authorized Work Branch Badge */}
+      {/* Employee Profile Header Card */}
       {employeeProfile && (
-        employeeProfile.branch ? (
-          <div className="bg-gradient-to-r from-emerald-500/10 to-teal-500/10 border border-emerald-200/60 p-4 rounded-2xl flex items-center justify-between shadow-sm">
-            <div className="flex flex-col gap-0.5 text-left">
-              <span className="text-[10px] uppercase font-black text-emerald-800 tracking-wider">សាខាបំពេញការងារ / Work Branch</span>
-              <span className="text-sm font-black text-slate-800 flex items-center gap-1.5 mt-0.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                {employeeProfile.branch.name}
+        <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-sm flex items-center gap-4 relative overflow-hidden">
+          {/* Decorative background shapes for a premium look */}
+          <div className="absolute -right-6 -bottom-6 w-24 h-24 bg-indigo-50 rounded-full opacity-60 pointer-events-none"></div>
+          <div className="absolute -right-2 -top-10 w-20 h-20 bg-blue-50 rounded-full opacity-60 pointer-events-none"></div>
+          
+          {/* Avatar Icon */}
+          <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-500 to-blue-600 flex items-center justify-center text-white shrink-0 font-black text-lg shadow-md uppercase">
+            {employeeProfile.name ? employeeProfile.name.substring(0, 2) : 'EM'}
+          </div>
+
+          <div className="flex-1 min-w-0 text-left">
+            <div className="flex items-center gap-2">
+              <h2 className="text-base font-black text-slate-800 truncate">{employeeProfile.name}</h2>
+              <span className="px-2 py-0.5 bg-indigo-50 border border-indigo-100 rounded-md text-[9px] font-extrabold text-indigo-600 uppercase tracking-wider shrink-0">
+                {employeeProfile.employeeIdCode || 'EMP'}
               </span>
             </div>
-            <span className="text-[10px] font-extrabold bg-emerald-100 text-emerald-800 px-3 py-1 rounded-lg">
-              Authorized Staff
-            </span>
-          </div>
-        ) : (
-          <div className="bg-gradient-to-r from-blue-500/10 to-indigo-500/10 border border-blue-200/60 p-4 rounded-2xl flex items-center justify-between shadow-sm">
-            <div className="flex flex-col gap-0.5 text-left">
-              <span className="text-[10px] uppercase font-black text-blue-800 tracking-wider">ទីតាំងបំពេញការងារ / Work Location</span>
-              <span className="text-sm font-black text-slate-800 flex items-center gap-1.5 mt-0.5">
-                <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                General Office / ការិយាល័យកណ្តាល
+            <p className="text-[11px] font-bold text-slate-500 mt-0.5 uppercase tracking-wide truncate">
+              {employeeProfile.jobTitle || 'Staff'} • {employeeProfile.department?.name || 'Department'}
+            </p>
+
+            <div className="flex items-center gap-1.5 mt-2 text-xs font-bold text-slate-600">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span>សាខាបំពេញការងារ៖</span>
+              <span className="text-slate-800 underline decoration-emerald-400 decoration-2 underline-offset-2 font-black">
+                {employeeProfile.branch?.name || 'ការិយាល័យកណ្តាល (HQ)'}
               </span>
             </div>
-            <span className="text-[10px] font-extrabold bg-blue-100 text-blue-800 px-3 py-1 rounded-lg">
-              HQ Staff
-            </span>
           </div>
-        )
+        </div>
       )}
 
       {/* 1. Proximity check Card */}
