@@ -105,6 +105,15 @@ export default function Reports() {
   const [dateTo, setDateTo] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
+  // Pagination State
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+
+  // Reset page when filter inputs change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeTab, selectedDeptId, selectedEmployeeId, dateFrom, dateTo, searchTerm]);
+
   const fetchReports = async () => {
     try {
       setLoading(true);
@@ -285,6 +294,61 @@ export default function Reports() {
   const filteredCalculatedItems = getFilteredCalculatedItems();
   const filteredOtReports = getFilteredOtReports();
   const filteredNoShiftAtts = getFilteredNoShiftAtts();
+
+  const paginatedClockExceptions = filteredClockExceptions.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const paginatedShiftExceptions = filteredShiftExceptions.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const paginatedMiscExceptions = filteredMiscExceptions.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const paginatedCalculatedItems = filteredCalculatedItems.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const paginatedOtReports = filteredOtReports.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const paginatedNoShiftAtts = filteredNoShiftAtts.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  const renderPagination = (totalItems: number) => {
+    const totalPages = Math.ceil(totalItems / pageSize);
+    if (totalPages <= 1) return null;
+
+    return (
+      <div className="flex items-center justify-between border-t border-slate-100 pt-4 mt-4 flex-wrap gap-2 text-xs font-bold text-slate-500">
+        <div className="flex items-center gap-2">
+          <span>Show</span>
+          <select
+            value={pageSize}
+            onChange={(e) => {
+              setPageSize(Number(e.target.value));
+              setCurrentPage(1);
+            }}
+            className="bg-slate-50 border border-slate-200 rounded-lg py-1 px-2 text-slate-700 focus:outline-none cursor-pointer"
+          >
+            {[10, 20, 50, 100].map(size => (
+              <option key={size} value={size}>{size} entries</option>
+            ))}
+          </select>
+          <span>per page</span>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            disabled={currentPage === 1}
+            onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+            className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 hover:bg-slate-100 disabled:opacity-50 text-slate-700 font-bold rounded-lg transition-all cursor-pointer"
+          >
+            Previous
+          </button>
+          <span className="px-3 py-1.5 bg-blue-50 border border-blue-100 text-blue-600 rounded-lg">
+            Page {currentPage} of {totalPages}
+          </span>
+          <button
+            type="button"
+            disabled={currentPage === totalPages}
+            onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+            className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 hover:bg-slate-100 disabled:opacity-50 text-slate-700 font-bold rounded-lg transition-all cursor-pointer"
+          >
+            Next
+          </button>
+        </div>
+      </div>
+    );
+  };
 
   // Dynamic calculations based on filtered datasets
   const totalAnomalies = filteredClockExceptions.length + filteredShiftExceptions.length + filteredMiscExceptions.length;
@@ -492,7 +556,7 @@ export default function Reports() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredClockExceptions.map((ex) => (
+                    {paginatedClockExceptions.map((ex) => (
                       <tr key={ex.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                         <td className="py-3 px-3 font-semibold text-slate-800 text-xs">{ex.employeeName}</td>
                         <td className="py-3 px-3 text-slate-655 text-xs">{ex.departmentName}</td>
@@ -514,6 +578,7 @@ export default function Reports() {
                   </tbody>
                 </table>
               </div>
+              {renderPagination(filteredClockExceptions.length)}
             </div>
           )}
 
@@ -549,7 +614,7 @@ export default function Reports() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredShiftExceptions.map((ex) => (
+                    {paginatedShiftExceptions.map((ex) => (
                        <tr key={ex.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                           <td className="py-3 px-3 font-semibold text-slate-800 text-xs">{ex.employeeIdCode}</td>
                           <td className="py-3 px-3 font-bold text-slate-800 text-xs">{ex.employeeName}</td>
@@ -596,6 +661,7 @@ export default function Reports() {
                   </tbody>
                 </table>
               </div>
+              {renderPagination(filteredShiftExceptions.length)}
             </div>
           )}
 
@@ -623,7 +689,7 @@ export default function Reports() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredMiscExceptions.map((ex) => (
+                    {paginatedMiscExceptions.map((ex) => (
                        <tr key={ex.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                           <td className="py-3 px-3 font-semibold text-slate-800 text-xs">{ex.employeeName}</td>
                           <td className="py-3 px-3 text-slate-655 text-xs">{new Date(ex.date).toLocaleString()}</td>
@@ -642,6 +708,7 @@ export default function Reports() {
                   </tbody>
                 </table>
               </div>
+              {renderPagination(filteredMiscExceptions.length)}
             </div>
           )}
 
@@ -673,7 +740,7 @@ export default function Reports() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredCalculatedItems.map((item) => (
+                    {paginatedCalculatedItems.map((item) => (
                        <tr key={item.employeeId} className="border-b border-slate-100 hover:bg-slate-50/50">
                           <td className="py-3 px-3 font-semibold text-slate-800 text-xs">{item.name}</td>
                           <td className="py-3 px-3 text-slate-655 text-xs">{item.department}</td>
@@ -696,6 +763,7 @@ export default function Reports() {
                   </tbody>
                 </table>
               </div>
+              {renderPagination(filteredCalculatedItems.length)}
             </div>
           )}
 
@@ -724,7 +792,7 @@ export default function Reports() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredOtReports.map((ot) => (
+                    {paginatedOtReports.map((ot) => (
                        <tr key={ot.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                           <td className="py-3 px-3 font-semibold text-slate-800 text-xs">{ot.employeeName}</td>
                           <td className="py-3 px-3 text-slate-655 text-xs">
@@ -749,6 +817,7 @@ export default function Reports() {
                   </tbody>
                 </table>
               </div>
+              {renderPagination(filteredOtReports.length)}
             </div>
           )}
 
@@ -776,7 +845,7 @@ export default function Reports() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredNoShiftAtts.map((log) => (
+                    {paginatedNoShiftAtts.map((log) => (
                        <tr key={log.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                           <td className="py-3 px-3 font-semibold text-slate-800 text-xs">{log.employeeName}</td>
                           <td className="py-3 px-3 text-slate-655 text-xs">{log.departmentName}</td>
@@ -800,6 +869,7 @@ export default function Reports() {
                   </tbody>
                 </table>
               </div>
+              {renderPagination(filteredNoShiftAtts.length)}
             </div>
           )}
 
