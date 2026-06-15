@@ -11,6 +11,13 @@ interface HistoryLog {
   longitude: number;
   distance: number;
   status: string;
+  employee?: {
+    name: string;
+    email: string;
+    department?: {
+      name: string;
+    };
+  };
 }
 
 export default function ScanHub() {
@@ -718,6 +725,7 @@ export default function ScanHub() {
             <table className="min-w-full text-left border-collapse">
               <thead>
                 <tr className="border-b border-slate-100">
+                  <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-xs">ឈ្មោះ / Name</th>
                   <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-xs">Check In Time</th>
                   <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-xs">Check Out Time</th>
                   <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-xs">GPS Distance</th>
@@ -727,7 +735,10 @@ export default function ScanHub() {
               <tbody>
                 {history.map((log) => (
                   <tr key={log.id} className="border-b border-slate-100 hover:bg-slate-50/50">
-                    <td className="py-3 px-3 text-slate-800 font-semibold text-xs">
+                    <td className="py-3 px-3 text-slate-800 font-black text-xs">
+                      {log.employee?.name || 'Unknown'}
+                    </td>
+                    <td className="py-3 px-3 text-slate-600 text-xs">
                       {new Date(log.checkIn).toLocaleString()}
                     </td>
                     <td className="py-3 px-3 text-slate-600 text-xs">
