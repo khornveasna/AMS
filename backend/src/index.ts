@@ -1042,6 +1042,50 @@ app.post('/api/attendance/scan', authenticateToken, async (req: AuthenticatedReq
       }
     }
 
+    // Check if employee is scanning too early for check-in
+    let isPerformingCheckOut = scanType === 'CHECK_OUT';
+    if (!isPerformingCheckOut && matchedTimetableForCheckOut) {
+      const activeAtt = await prisma.attendance.findFirst({
+        where: {
+          employeeId,
+          timetableId: matchedTimetableForCheckOut.id,
+          checkIn: { gte: todayStart, lt: todayEnd },
+          checkOut: null
+        }
+      });
+      if (activeAtt) {
+        isPerformingCheckOut = true;
+      }
+    }
+
+    if (!isPerformingCheckOut && timetablesForToday.length > 0) {
+      const alreadyCheckedIn = await prisma.attendance.findMany({
+        where: {
+          employeeId,
+          checkIn: { gte: todayStart, lt: todayEnd }
+        },
+        select: { timetableId: true }
+      });
+      const alreadyCheckedInIds = alreadyCheckedIn.map((a) => a.timetableId).filter(Boolean);
+
+      const remainingTimetables = timetablesForToday
+        .filter((tt) => !alreadyCheckedInIds.includes(tt.id))
+        .sort((a, b) => a.beginningIn.localeCompare(b.beginningIn));
+
+      if (remainingTimetables.length > 0) {
+        const nextTt = remainingTimetables[0];
+        const startIn = timeStringToDate(nextTt.beginningIn);
+
+        if (now < startIn) {
+          const diffMs = startIn.getTime() - now.getTime();
+          const diffMinutes = Math.ceil(diffMs / (60 * 1000));
+          return await logFailure(
+            `មិនទាន់ដល់ម៉ោងស្កែនចូលសម្រាប់ ${nextTt.name} ទេ! នៅខ្វះរយៈពេល ${diffMinutes} នាទីទៀត / Not yet time to scan in for ${nextTt.name}! ${diffMinutes} minutes remaining.`
+          );
+        }
+      }
+    }
+
     // Explicit manual scanType logic overrides automatic timetable detection windows
     if (scanType === 'CHECK_OUT') {
       let activeAttForOut: any = null;
