@@ -624,6 +624,7 @@ app.post('/api/schedules', authenticateToken, requireAdmin, async (req: Request,
       const existing = await prisma.schedule.findFirst({
         where: {
           employeeId,
+          shiftId,
           date: {
             gte: targetDate,
             lt: new Date(targetDate.getTime() + 24 * 60 * 60 * 1000)
@@ -632,10 +633,7 @@ app.post('/api/schedules', authenticateToken, requireAdmin, async (req: Request,
       });
 
       if (existing) {
-        return await prisma.schedule.update({
-          where: { id: existing.id },
-          data: { shiftId }
-        });
+        return existing;
       } else {
         return await prisma.schedule.create({
           data: { employeeId, shiftId, date: targetDate }
@@ -995,7 +993,7 @@ app.post('/api/attendance/scan', authenticateToken, async (req: AuthenticatedReq
     todayStart.setHours(0, 0, 0, 0);
     const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
 
-    const schedule = await prisma.schedule.findFirst({
+    const schedules = await prisma.schedule.findMany({
       where: {
         employeeId,
         date: { gte: todayStart, lt: todayEnd }
@@ -1012,11 +1010,13 @@ app.post('/api/attendance/scan', authenticateToken, async (req: AuthenticatedReq
     });
 
     const dayOfWeek = now.getDay(); // 0 = Sunday, 1 = Monday, ... 6 = Saturday
-    const timetablesForToday = schedule
-      ? schedule.shift.dayTimetables
-          .filter((dt) => dt.dayOfWeek === dayOfWeek)
-          .map((dt) => dt.timetable)
-      : [];
+    const timetablesForToday: any[] = [];
+    schedules.forEach(sched => {
+      const tts = sched.shift.dayTimetables
+        .filter((dt) => dt.dayOfWeek === dayOfWeek)
+        .map((dt) => dt.timetable);
+      timetablesForToday.push(...tts);
+    });
 
     const timeStringToDate = (timeStr: string) => {
       const [h, m] = timeStr.split(':').map(Number);
@@ -1203,8 +1203,8 @@ app.post('/api/attendance/scan', authenticateToken, async (req: AuthenticatedReq
           status = AttendanceStatus.LATE;
           lateMinutes = diffMinutes;
         }
-      } else if (schedule) {
-        const shift = schedule.shift;
+      } else if (schedules.length > 0) {
+        const shift = schedules[0].shift;
         const [shiftHour, shiftMin] = shift.startTime.split(':').map(Number);
         const shiftTime = new Date(now.getTime());
         shiftTime.setHours(shiftHour, shiftMin, 0, 0);
@@ -1352,8 +1352,8 @@ app.post('/api/attendance/scan', authenticateToken, async (req: AuthenticatedReq
           status = AttendanceStatus.LATE;
           lateMinutes = diffMinutes;
         }
-      } else if (schedule) {
-        const shift = schedule.shift;
+      } else if (schedules.length > 0) {
+        const shift = schedules[0].shift;
         const [shiftHour, shiftMin] = shift.startTime.split(':').map(Number);
         const shiftTime = new Date(now.getTime());
         shiftTime.setHours(shiftHour, shiftMin, 0, 0);
