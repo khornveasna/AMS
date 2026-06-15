@@ -575,7 +575,23 @@ app.delete('/api/shifts/:id', authenticateToken, requireAdmin, async (req: Reque
 
 app.get('/api/schedules', authenticateToken, async (req: Request, res: Response) => {
   try {
+    const { startDate, endDate } = req.query;
+    const whereClause: any = {};
+
+    if (startDate || endDate) {
+      whereClause.date = {};
+      if (startDate) {
+        whereClause.date.gte = new Date(startDate as string);
+      }
+      if (endDate) {
+        const end = new Date(endDate as string);
+        end.setHours(23, 59, 59, 999);
+        whereClause.date.lte = end;
+      }
+    }
+
     const schedules = await prisma.schedule.findMany({
+      where: whereClause,
       include: {
         employee: { select: { name: true, email: true, departmentId: true } },
         shift: {

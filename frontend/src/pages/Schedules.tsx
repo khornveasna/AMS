@@ -149,24 +149,53 @@ export default function Schedules() {
   const [bulkSchedules, setBulkSchedules] = useState<Schedule[]>([]);
   const [newShiftId, setNewShiftId] = useState('');
 
+  const fetchSchedules = async (year: number, month: number, startStr?: string, endStr?: string) => {
+    try {
+      const pStart = new Date(year, month, 1);
+      const pEnd = new Date(year, month + 1, 0);
+
+      let minDate = pStart;
+      let maxDate = pEnd;
+
+      if (startStr) {
+        const sDate = new Date(startStr);
+        if (!isNaN(sDate.getTime()) && sDate < minDate) minDate = sDate;
+      }
+      if (endStr) {
+        const eDate = new Date(endStr);
+        if (!isNaN(eDate.getTime()) && eDate > maxDate) maxDate = eDate;
+      }
+
+      const startDateQuery = minDate.toISOString().split('T')[0];
+      const endDateQuery = maxDate.toISOString().split('T')[0];
+
+      const res = await api.get('/schedules', {
+        params: { startDate: startDateQuery, endDate: endDateQuery }
+      });
+      setSchedules(res.data);
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to fetch schedules');
+    }
+  };
+
   const fetchData = async () => {
     try {
       setLoading(true);
       setError('');
       
-      const [ttRes, shiftRes, schedRes, deptRes, empRes] = await Promise.all([
+      const [ttRes, shiftRes, deptRes, empRes] = await Promise.all([
         api.get('/timetables'),
         api.get('/shifts'),
-        api.get('/schedules'),
         api.get('/departments'),
         api.get('/employees')
       ]);
 
       setTimetables(ttRes.data);
       setShifts(shiftRes.data);
-      setSchedules(schedRes.data);
       setDepartments(deptRes.data);
       setEmployees(empRes.data);
+
+      await fetchSchedules(previewYear, previewMonth, schedStartDate, schedEndDate);
 
       if (!previewEmployeeId) {
         setPreviewEmployeeId('all');
@@ -181,6 +210,12 @@ export default function Schedules() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  useEffect(() => {
+    if (timetables.length > 0) {
+      fetchSchedules(previewYear, previewMonth, schedStartDate, schedEndDate);
+    }
+  }, [previewYear, previewMonth, schedStartDate, schedEndDate]);
 
   // Timetable Operations
   const handleSaveTimetable = async (e: React.FormEvent) => {
