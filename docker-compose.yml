@@ -27,6 +27,8 @@ services:
       - PORT=${PORT}
     depends_on:
       - postgres-db
+    volumes:
+      - ams_backups:/app/backups
 
   frontend-app:
     build: ./frontend
@@ -40,3 +42,4 @@ services:
 
 volumes:
   postgres_data:
+  ams_backups:

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import api from '../utils/api';
-import { Download, ShieldAlert, Loader2, AlertTriangle, Clock, UserX, TrendingUp, X } from 'lucide-react';
+import { Download, ShieldAlert, Loader2, X } from 'lucide-react';
 
 interface ClockException {
   id: string;
@@ -81,6 +81,7 @@ interface EmployeeSelectInfo {
   id: string;
   name: string;
   departmentId: string;
+  employeeIdCode?: string;
 }
 
 export default function Reports() {
@@ -95,7 +96,6 @@ export default function Reports() {
   const [calculatedItems, setCalculatedItems] = useState<CalculatedItem[]>([]);
   const [otReports, setOtReports] = useState<OTReport[]>([]);
   const [noShiftAtts, setNoShiftAtts] = useState<NoShiftAtt[]>([]);
-
   // Filter states
   const [departments, setDepartments] = useState<Array<{id:string; name:string}>>([]);
   const [employees, setEmployees] = useState<EmployeeSelectInfo[]>([]);
@@ -114,12 +114,16 @@ export default function Reports() {
     setCurrentPage(1);
   }, [activeTab, selectedDeptId, selectedEmployeeId, dateFrom, dateTo, searchTerm]);
 
-  const fetchReports = async () => {
+  const fetchReports = async (fromVal?: string, toVal?: string) => {
     try {
       setLoading(true);
       setError('');
+      const params: any = {};
+      if (fromVal) params.from = fromVal;
+      if (toVal) params.to = toVal;
+
       const [reportsRes, deptRes, empRes] = await Promise.all([
-        api.get('/attendance/dashboard-reports'),
+        api.get('/attendance/dashboard-reports', { params }),
         api.get('/departments'),
         api.get('/employees'),
       ]);
@@ -141,8 +145,8 @@ export default function Reports() {
   };
 
   useEffect(() => {
-    fetchReports();
-  }, []);
+    fetchReports(dateFrom, dateTo);
+  }, [dateFrom, dateTo]);
 
   // Reset employee selection if department changes
   const handleDepartmentChange = (deptId: string) => {
@@ -280,7 +284,7 @@ export default function Reports() {
   }
 
   const tabs: { id: TabType; label: string; khmerLabel: string }[] = [
-    { id: 'shift-ex', label: 'Shift Exception', khmerLabel: 'ខុសវេនការងារ' },
+    { id: 'shift-ex', label: 'Scan & Exceptions Report', khmerLabel: 'របាយការណ៍ស្កែនវត្តមាន' },
     { id: 'clock-ex', label: 'Clock In/Out Exceptions', khmerLabel: 'អត់ស្កែនចេញ' },
     { id: 'misc-ex', label: 'Misc Exception', khmerLabel: 'បញ្ហា GPS/Token' },
     { id: 'calc-items', label: 'Calculated Items', khmerLabel: 'របាយការណ៍បូកសរុប' },
@@ -350,11 +354,7 @@ export default function Reports() {
     );
   };
 
-  // Dynamic calculations based on filtered datasets
-  const totalAnomalies = filteredClockExceptions.length + filteredShiftExceptions.length + filteredMiscExceptions.length;
-  const totalLate = filteredShiftExceptions.filter(ex => ex.type === 'LATE').length;
-  const totalAbsent = filteredShiftExceptions.filter(ex => ex.type === 'ABSENT').length;
-  const totalOTHours = filteredOtReports.reduce((sum, ot) => sum + ot.otHours, 0);
+
 
   // Filter employees options based on selected department
   const filteredEmployeesForSelect = selectedDeptId === 'all'
@@ -370,7 +370,7 @@ export default function Reports() {
           <p className="text-slate-500 text-xs font-semibold mt-1 uppercase">គណនាការអនុលោមតាមកាលវិភាគ ពិនិត្យបញ្ហា GPS និងការថែមម៉ោងរបស់បុគ្គលិក / Audit schedules compliance, GPS mock failures and overtime</p>
         </div>
         <button 
-          onClick={fetchReports}
+          onClick={() => fetchReports(dateFrom, dateTo)}
           className="px-4 py-2 bg-blue-50 border border-blue-200 text-xs font-bold text-blue-600 rounded-xl hover:bg-blue-100 transition-all cursor-pointer shadow-sm self-start sm:self-auto"
         >
           ធ្វើបច្ចុប្បន្នភាព / Refresh Reports
@@ -384,52 +384,6 @@ export default function Reports() {
         </div>
       )}
 
-      {/* Dynamic Statistics Summary Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Card 1: Total Anomalies */}
-        <div className="bg-rose-50/50 border border-rose-100/80 rounded-2xl p-4 flex items-center justify-between shadow-sm">
-          <div className="flex flex-col">
-            <span className="text-[10px] font-bold text-rose-600 uppercase tracking-wider">ករណីមិនប្រក្រតីសរុប / Total Anomalies</span>
-            <span className="text-2xl font-black text-rose-700 mt-1">{totalAnomalies} <span className="text-xs font-normal text-rose-500">ដង (Times)</span></span>
-          </div>
-          <div className="p-3 bg-rose-100/80 text-rose-600 rounded-xl">
-            <AlertTriangle size={20} />
-          </div>
-        </div>
-
-        {/* Card 2: Total Late */}
-        <div className="bg-amber-50/50 border border-amber-100/80 rounded-2xl p-4 flex items-center justify-between shadow-sm">
-          <div className="flex flex-col">
-            <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wider">មកយឺតសរុប / Total Late</span>
-            <span className="text-2xl font-black text-amber-700 mt-1">{totalLate} <span className="text-xs font-normal text-amber-500">ដង (Times)</span></span>
-          </div>
-          <div className="p-3 bg-amber-100/80 text-amber-600 rounded-xl">
-            <Clock size={20} />
-          </div>
-        </div>
-
-        {/* Card 3: Total Absent */}
-        <div className="bg-orange-50/50 border border-orange-100/80 rounded-2xl p-4 flex items-center justify-between shadow-sm">
-          <div className="flex flex-col">
-            <span className="text-[10px] font-bold text-orange-600 uppercase tracking-wider">អវត្តមានសរុប / Total Absences</span>
-            <span className="text-2xl font-black text-orange-700 mt-1">{totalAbsent} <span className="text-xs font-normal text-orange-500">ថ្ងៃ (Days)</span></span>
-          </div>
-          <div className="p-3 bg-orange-100/80 text-orange-600 rounded-xl">
-            <UserX size={20} />
-          </div>
-        </div>
-
-        {/* Card 4: Total OT Hours */}
-        <div className="bg-indigo-50/50 border border-indigo-100/80 rounded-2xl p-4 flex items-center justify-between shadow-sm">
-          <div className="flex flex-col">
-            <span className="text-[10px] font-bold text-indigo-600 uppercase tracking-wider">ម៉ោងថែមសរុប / Total Overtime</span>
-            <span className="text-2xl font-black text-indigo-700 mt-1">+{totalOTHours} <span className="text-xs font-normal text-indigo-500">ម៉ោង (Hours)</span></span>
-          </div>
-          <div className="p-3 bg-indigo-100/80 text-indigo-600 rounded-xl">
-            <TrendingUp size={20} />
-          </div>
-        </div>
-      </div>
 
       {/* Filter Bar */}
       <div className="flex flex-wrap items-end gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200 shadow-inner">
@@ -582,13 +536,13 @@ export default function Reports() {
             </div>
           )}
 
-          {/* TAB 2: Shift Exception */}
+          {/* TAB 2: Scan & Exceptions Report */}
           {activeTab === 'shift-ex' && (
             <div>
               <div className="flex justify-between items-center mb-4">
-                <span className="text-xs text-slate-500 font-bold">Scheduled shifts marked as ABSENT or LATE</span>
+                <span className="text-xs text-slate-500 font-bold">List of all scheduled work hours, scans, and exception statuses</span>
                 <button 
-                  onClick={() => handleExport('Shift Exceptions')}
+                  onClick={() => handleExport('Scan & Exceptions Report')}
                   className="px-3 py-1.5 bg-blue-50 border border-blue-100 text-blue-600 rounded-xl text-xs font-bold hover:bg-blue-100 transition-all cursor-pointer flex items-center gap-1.5"
                 >
                   <Download size={14} /> Export Excel
@@ -601,16 +555,11 @@ export default function Reports() {
                       <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">អត្តលេខ / ID</th>
                       <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">ឈ្មោះ / Name</th>
                       <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">ថ្ងៃខែឆ្នាំ / Date</th>
-                      <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">វេនការងារ / Timetable</th>
-                      <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">ម៉ោងត្រូវចូល / On Duty</th>
-                      <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">ម៉ោងត្រូវចេញ / Off Duty</th>
+                      <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">ម៉ោងការងារ / Timetable</th>
                       <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">ស្កែនចូល / Clock In</th>
                       <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">ស្កែនចេញ / Clock Out</th>
-                      <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">យឺត / Late</th>
-                      <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">ចេញមុន / Early</th>
-                      <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">អវត្តមាន / Absent</th>
                       <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">ម៉ោងសរុប / Work Time</th>
-                      <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">ប្រភេទ / Exception</th>
+                      <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-[10px] uppercase">ស្ថានភាព / Status</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -618,32 +567,22 @@ export default function Reports() {
                        <tr key={ex.id} className="border-b border-slate-100 hover:bg-slate-50/50">
                           <td className="py-3 px-3 font-semibold text-slate-800 text-xs">{ex.employeeIdCode}</td>
                           <td className="py-3 px-3 font-bold text-slate-800 text-xs">{ex.employeeName}</td>
-                          <td className="py-3 px-3 text-slate-655 text-xs">
+                          <td className="py-3 px-3 text-slate-600 text-xs">
                             {new Date(ex.date).toLocaleDateString([], { dateStyle: 'medium' })}
                           </td>
-                          <td className="py-3 px-3 text-slate-655 text-xs font-semibold">{ex.timetable}</td>
-                          <td className="py-3 px-3 text-slate-500 text-xs">{ex.onDuty}</td>
-                          <td className="py-3 px-3 text-slate-500 text-xs">{ex.offDuty}</td>
-                          <td className="py-3 px-3 text-slate-655 text-xs font-semibold">{ex.clockIn}</td>
-                          <td className="py-3 px-3 text-slate-655 text-xs font-semibold">{ex.clockOut}</td>
-                          <td className="py-3 px-3 text-amber-600 font-bold text-xs">{ex.late}</td>
-                          <td className="py-3 px-3 text-orange-600 font-bold text-xs">{ex.early}</td>
-                          <td className="py-3 px-3 text-xs">
-                            <span className={`px-2 py-0.5 rounded-full font-bold text-[9px] ${
-                              ex.absent === 'Yes' ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'bg-slate-100 text-slate-500 border border-slate-200'
-                            }`}
-                            >
-                              {ex.absent === 'Yes' ? 'Yes/បាទ' : 'No/ទេ'}
-                            </span>
-                          </td>
+                          <td className="py-3 px-3 text-slate-600 text-xs font-semibold">{ex.timetable}</td>
+                          <td className="py-3 px-3 text-slate-600 text-xs font-semibold">{ex.clockIn}</td>
+                          <td className="py-3 px-3 text-slate-600 text-xs font-semibold">{ex.clockOut}</td>
                           <td className="py-3 px-3 text-slate-700 font-bold text-xs">{ex.workTime}</td>
                           <td className="py-3 px-3 text-xs">
                             <span className={`px-2 py-0.5 rounded-full font-bold text-[9px] ${
                               ex.type === 'ABSENT' 
                                 ? 'bg-rose-50 text-rose-600 border border-rose-100' 
-                                : ex.type === 'LATE'
-                                  ? 'bg-amber-50 text-amber-600 border border-amber-100'
-                                  : 'bg-orange-50 text-orange-600 border border-orange-100'
+                                : ex.type === 'ON TIME'
+                                  ? 'bg-emerald-50 text-emerald-600 border border-emerald-100'
+                                  : ex.type === 'LATE'
+                                    ? 'bg-amber-50 text-amber-600 border border-amber-100'
+                                    : 'bg-orange-50 text-orange-600 border border-orange-100'
                             }`}
                             >
                               {ex.type}
@@ -653,8 +592,8 @@ export default function Reports() {
                     ))}
                     {filteredShiftExceptions.length === 0 && (
                       <tr>
-                        <td className="py-8 text-center text-slate-400 font-bold text-xs" colSpan={13}>
-                          No violations (Absences or Tardiness) detected.
+                        <td className="py-8 text-center text-slate-400 font-bold text-xs" colSpan={8}>
+                          No scan records detected.
                         </td>
                       </tr>
                     )}
@@ -875,6 +814,7 @@ export default function Reports() {
 
         </div>
       </div>
+
     </div>
   );
 }

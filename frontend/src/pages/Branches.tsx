@@ -277,6 +277,7 @@ export default function Branches() {
   };
 
   const handlePrintQR = (branch: Branch) => {
+    const companyName = localStorage.getItem('company_name') || 'AMS SYSTEM';
     const qrValue = `BRANCH_QR:${branch.qrCodeKey}`;
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
@@ -333,7 +334,7 @@ export default function Branches() {
         </head>
         <body>
           <div class="container">
-            <div class="logo">AMS SYSTEM</div>
+            <div class="logo">${companyName}</div>
             <div id="qr-code"></div>
             <h1>${branch.name}</h1>
             <p>សូមស្កែន QR នេះដើម្បីចុះវត្តមាន<br/>Scan QR Code to Register Attendance</p>

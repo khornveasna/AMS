@@ -13,7 +13,9 @@ import {
   Menu, 
   X, 
   UserCircle,
-  MapPin
+  MapPin,
+  ShieldCheck,
+  Clock
 } from 'lucide-react';
 
 // Import Pages
@@ -26,6 +28,9 @@ import Reports from './pages/Reports';
 import QrDisplay from './pages/QrDisplay';
 import ScanHub from './pages/ScanHub';
 import Branches from './pages/Branches';
+import UsersPage from './pages/Users';
+import Attendance from './pages/Attendance';
+import api from './utils/api';
 
 const queryClient = new QueryClient();
 
@@ -46,11 +51,64 @@ function ProtectedRoute({ children, requireAdmin = false }: { children: React.Re
   return <>{children}</>;
 }
 
+const updateFavicon = (logoUrl: string) => {
+  const link = (document.querySelector("link[rel*='icon']") as HTMLLinkElement) || document.createElement('link');
+  link.type = logoUrl.startsWith('data:image/svg') ? 'image/svg+xml' : 'image/x-icon';
+  link.rel = 'shortcut icon';
+  link.href = logoUrl || '/favicon.svg';
+  if (!document.querySelector("link[rel*='icon']")) {
+    document.getElementsByTagName('head')[0].appendChild(link);
+  }
+};
+
 // Main App Layout Shell
 function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const location = useLocation();
   const navigate = useNavigate();
+
+  const [companyName, setCompanyName] = React.useState(localStorage.getItem('company_name') || 'AMS SYSTEM');
+  const [companyLogo, setCompanyLogo] = React.useState(localStorage.getItem('company_logo') || '');
+
+  const fetchSettings = async () => {
+    try {
+      const res = await api.get('/settings');
+      if (res.data.company_name) {
+        setCompanyName(res.data.company_name);
+        localStorage.setItem('company_name', res.data.company_name);
+        document.title = `${res.data.company_name} - Attendance Management System`;
+      }
+      if (res.data.company_logo) {
+        setCompanyLogo(res.data.company_logo);
+        localStorage.setItem('company_logo', res.data.company_logo);
+        updateFavicon(res.data.company_logo);
+      }
+    } catch (err) {
+      console.error('Failed to load settings', err);
+    }
+  };
+
+  React.useEffect(() => {
+    fetchSettings();
+    const initialName = localStorage.getItem('company_name');
+    if (initialName) {
+      document.title = `${initialName} - Attendance Management System`;
+    }
+    const initialLogo = localStorage.getItem('company_logo');
+    if (initialLogo) {
+      updateFavicon(initialLogo);
+    }
+    const handleUpdate = () => {
+      const name = localStorage.getItem('company_name') || 'AMS SYSTEM';
+      const logo = localStorage.getItem('company_logo') || '';
+      setCompanyName(name);
+      setCompanyLogo(logo);
+      document.title = `${name} - Attendance Management System`;
+      updateFavicon(logo);
+    };
+    window.addEventListener('settings_updated', handleUpdate);
+    return () => window.removeEventListener('settings_updated', handleUpdate);
+  }, []);
   const [searchParams] = useSearchParams();
   const isFullscreen = searchParams.get('fullscreen') === 'true';
   const userRaw = localStorage.getItem('user');
@@ -68,10 +126,12 @@ function AppLayout() {
       { path: '/dashboard', label: 'ផ្ទាំងគ្រប់គ្រង / Dashboard', icon: LayoutDashboard, adminOnly: true },
       { path: '/departments', label: 'ការិយាល័យ / Departments', icon: Building2, adminOnly: true },
       { path: '/employees', label: 'បុគ្គលិក / Employees', icon: Users, adminOnly: true },
+      { path: '/attendance', label: 'វត្តមានបុគ្គលិក / Attendance Logs', icon: Clock, adminOnly: true },
       { path: '/schedules', label: 'ពេលវេលា / Timetable', icon: Calendar, adminOnly: true },
       { path: '/reports', label: 'របាយការណ៍ / Exceptions Reports', icon: FileSpreadsheet, adminOnly: true },
       { path: '/qr-display', label: 'អេក្រង់ QR / Company QR Screen', icon: QrCode, adminOnly: true },
       { path: '/branches', label: 'សាខា / Branches & QR', icon: MapPin, adminOnly: true },
+      { path: '/users', label: 'អ្នកប្រើប្រាស់ / User Management', icon: ShieldCheck, adminOnly: true },
     ] : []),
     { path: '/scan-hub', label: 'ស្កែនវត្តមាន / Mobile Scan Hub', icon: Smartphone, adminOnly: false },
   ];
@@ -84,10 +144,12 @@ function AppLayout() {
             <Route path="/dashboard" element={<ProtectedRoute requireAdmin><Dashboard /></ProtectedRoute>} />
             <Route path="/departments" element={<ProtectedRoute requireAdmin><Departments /></ProtectedRoute>} />
             <Route path="/employees" element={<ProtectedRoute requireAdmin><Employees /></ProtectedRoute>} />
+            <Route path="/attendance" element={<ProtectedRoute requireAdmin><Attendance /></ProtectedRoute>} />
             <Route path="/schedules" element={<ProtectedRoute requireAdmin><Schedules /></ProtectedRoute>} />
             <Route path="/reports" element={<ProtectedRoute requireAdmin><Reports /></ProtectedRoute>} />
             <Route path="/qr-display" element={<ProtectedRoute requireAdmin><QrDisplay /></ProtectedRoute>} />
             <Route path="/branches" element={<ProtectedRoute requireAdmin><Branches /></ProtectedRoute>} />
+            <Route path="/users" element={<ProtectedRoute requireAdmin><UsersPage /></ProtectedRoute>} />
             <Route path="/scan-hub" element={<ProtectedRoute><ScanHub /></ProtectedRoute>} />
             <Route path="*" element={<Navigate to={isAdmin ? "/dashboard" : "/scan-hub"} replace />} />
           </Routes>
@@ -98,6 +160,14 @@ function AppLayout() {
 
   return (
     <div className="flex h-screen bg-slate-50 overflow-hidden">
+      {/* Sidebar Overlay for Mobile */}
+      {sidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-30 md:hidden transition-opacity duration-300"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar for Desktop */}
       <aside className={`fixed inset-y-0 left-0 z-40 w-64 bg-slate-900 border-r border-slate-800 flex flex-col transition-transform duration-300 md:translate-x-0 md:static ${
         sidebarOpen ? 'translate-x-0' : '-translate-x-full'
@@ -105,10 +175,18 @@ function AppLayout() {
         {/* Brand Logo */}
         <div className="h-16 flex items-center justify-between px-6 border-b border-slate-800 bg-slate-950">
           <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-600 rounded-lg text-white">
-              <Users size={20} />
-            </div>
-            <span className="font-extrabold text-white text-lg tracking-wider">AMS SYSTEM</span>
+            {companyLogo ? (
+              <div className="w-9 h-9 bg-white rounded-lg border border-slate-800 flex items-center justify-center overflow-hidden shrink-0">
+                <img src={companyLogo} alt="Logo" className="w-full h-full object-contain p-0.5" />
+              </div>
+            ) : (
+              <div className="p-2 bg-blue-600 rounded-lg text-white">
+                <Users size={20} />
+              </div>
+            )}
+            <span className="font-extrabold text-white text-base tracking-wider truncate max-w-[140px]" title={companyName}>
+              {companyName}
+            </span>
           </div>
           <button className="text-slate-400 md:hidden hover:text-white" onClick={() => setSidebarOpen(false)}>
             <X size={20} />
@@ -188,10 +266,12 @@ function AppLayout() {
             <Route path="/dashboard" element={<ProtectedRoute requireAdmin><Dashboard /></ProtectedRoute>} />
             <Route path="/departments" element={<ProtectedRoute requireAdmin><Departments /></ProtectedRoute>} />
             <Route path="/employees" element={<ProtectedRoute requireAdmin><Employees /></ProtectedRoute>} />
+            <Route path="/attendance" element={<ProtectedRoute requireAdmin><Attendance /></ProtectedRoute>} />
             <Route path="/schedules" element={<ProtectedRoute requireAdmin><Schedules /></ProtectedRoute>} />
             <Route path="/reports" element={<ProtectedRoute requireAdmin><Reports /></ProtectedRoute>} />
             <Route path="/qr-display" element={<ProtectedRoute requireAdmin><QrDisplay /></ProtectedRoute>} />
             <Route path="/branches" element={<ProtectedRoute requireAdmin><Branches /></ProtectedRoute>} />
+            <Route path="/users" element={<ProtectedRoute requireAdmin><UsersPage /></ProtectedRoute>} />
             <Route path="/scan-hub" element={<ProtectedRoute><ScanHub /></ProtectedRoute>} />
             <Route path="*" element={<Navigate to={isAdmin ? "/dashboard" : "/scan-hub"} replace />} />
           </Routes>

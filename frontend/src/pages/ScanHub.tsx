@@ -21,8 +21,8 @@ interface HistoryLog {
 }
 
 export default function ScanHub() {
-  const [latitude, setLatitude] = useState(11.5564);
-  const [longitude, setLongitude] = useState(104.9282);
+  const [latitude, setLatitude] = useState<number | null>(null);
+  const [longitude, setLongitude] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -33,15 +33,18 @@ export default function ScanHub() {
   const [historyLoading, setHistoryLoading] = useState(true);
   const [branches, setBranches] = useState<any[]>([]);
 
-  // Simulation mode defaults to true so testers can verify branch scans in localhost/office environments without physical GPS spoofing
-  const [simulateLocation] = useState(true);
+  // Simulation mode defaults to false so testers/employees are strictly verified using real GPS. Admins can still bypass/simulate for testing.
+  const [simulateLocation] = useState(false);
 
   // Core features: scanType, closest branch proximity, and camera control
   const [scanType, setScanType] = useState<'CHECK_IN' | 'CHECK_OUT'>('CHECK_IN');
-  const [closestBranch, setClosestBranch] = useState<{name: string, distance: number, inRange: boolean} | null>(null);
+  const [closestBranch, setClosestBranch] = useState<{name: string, distance: number, inRange: boolean, radius: number} | null>(null);
   const [detectingLocation, setDetectingLocation] = useState(false);
   const [locationWarning, setLocationWarning] = useState<string | null>(null);
   const [employeeProfile, setEmployeeProfile] = useState<any>(null);
+
+  const [companyName, setCompanyName] = useState(localStorage.getItem('company_name') || 'Employee Scan Hub');
+  const [companyLogo, setCompanyLogo] = useState(localStorage.getItem('company_logo') || '');
 
   // Detect secure context (HTTPS or localhost)
   const isSecure = typeof window !== 'undefined' && window.isSecureContext;
@@ -107,13 +110,23 @@ export default function ScanHub() {
         setLatitude(lat);
         setLongitude(lon);
       } catch (geoErr) {
-        console.warn("Real GPS failed, falling back to mock coordinates.", geoErr);
-        setLatitude(lat);
-        setLongitude(lon);
-        if (usingBranchMock) {
-          setLocationWarning(`⚠️ មិនអាចចាប់យកទីតាំង GPS ពិតបានទេ (ទូរស័ព្ទស្ថិតលើ HTTP/គ្មានការអនុញ្ញាត)។ ប្រព័ន្ធបានកំណត់ទីតាំងអ្នកទៅកាន់សាខា ${employeeProfile.branch.name} ដោយស្វ័យប្រវត្ត ដើម្បីសម្រួលដល់ការធ្វើតេស្ត! / Mock GPS set to assigned branch ${employeeProfile.branch.name} for testing.`);
+        const isSimulated = isAdmin || simulateLocation;
+        if (isSimulated) {
+          console.warn("Real GPS failed, falling back to mock coordinates.", geoErr);
+          setLatitude(lat);
+          setLongitude(lon);
+          if (usingBranchMock) {
+            setLocationWarning(`⚠️ មិនអាចចាប់យកទីតាំង GPS ពិតបានទេ (ទូរស័ព្ទស្ថិតលើ HTTP/គ្មានការអនុញ្ញាត)។ ប្រព័ន្ធបានកំណត់ទីតាំងអ្នកទៅកាន់សាខា ${employeeProfile.branch.name} ដោយស្វ័យប្រវត្ត ដើម្បីសម្រួលដល់ការធ្វើតេស្ត! / Mock GPS set to assigned branch ${employeeProfile.branch.name} for testing.`);
+          } else {
+            setLocationWarning("⚠️ មិនអាចចាប់យកទីតាំង GPS ពិតប្រាកដបានទេ (ទូរស័ព្ទស្ថិតលើ HTTP/គ្មានការអនុញ្ញាត)។ ប្រព័ន្ធបានប្រើទីតាំងការិយាល័យកណ្តាលសាកល្បងជំនួស! / GPS simulation active (HTTP fallback).");
+          }
         } else {
-          setLocationWarning("⚠️ មិនអាចចាប់យកទីតាំង GPS ពិតប្រាកដបានទេ (ទូរស័ព្ទស្ថិតលើ HTTP/គ្មានការអនុញ្ញាត)។ ប្រព័ន្ធបានប្រើទីតាំងការិយាល័យកណ្តាលសាកល្បងជំនួស! / GPS simulation active (HTTP fallback).");
+          console.error("Real GPS failed and simulation is disabled.", geoErr);
+          setLatitude(null);
+          setLongitude(null);
+          setClosestBranch(null);
+          setError("មិនអាចចាប់យកទីតាំង GPS របស់អ្នកបានទេ! សូមបើកដំណើរការ GPS ឬប្រើប្រាស់ HTTPS សុវត្ថិភាព / Cannot retrieve your GPS location! Please enable GPS permissions or use secure HTTPS connection.");
+          return;
         }
       }
 
@@ -137,7 +150,8 @@ export default function ScanHub() {
       setClosestBranch({
         name: closestLoc.name,
         distance: minDistance,
-        inRange: minDistance <= closestLoc.radius || !isSecure // Auto-allow in HTTP mode for smooth testing
+        inRange: minDistance <= closestLoc.radius || !isSecure, // Auto-allow in HTTP mode for smooth testing
+        radius: closestLoc.radius
       });
     } catch (err: any) {
       setError("មានបញ្ហាក្នុងការពិនិត្យទីតាំង / Error checking location.");
@@ -176,11 +190,50 @@ export default function ScanHub() {
     }
   };
 
+  const updateFavicon = (logoUrl: string) => {
+    const link = (document.querySelector("link[rel*='icon']") as HTMLLinkElement) || document.createElement('link');
+    link.type = logoUrl.startsWith('data:image/svg') ? 'image/svg+xml' : 'image/x-icon';
+    link.rel = 'shortcut icon';
+    link.href = logoUrl || '/favicon.svg';
+    if (!document.querySelector("link[rel*='icon']")) {
+      document.getElementsByTagName('head')[0].appendChild(link);
+    }
+  };
+
   useEffect(() => {
+    const initialName = localStorage.getItem('company_name');
+    if (initialName) {
+      document.title = `${initialName} - Attendance Management System`;
+    }
+    const initialLogo = localStorage.getItem('company_logo');
+    if (initialLogo) {
+      updateFavicon(initialLogo);
+    }
     fetchHistory();
     fetchBranches();
     fetchProfile();
+    api.get('/settings/public')
+      .then(res => {
+        if (res.data.company_name) {
+          setCompanyName(res.data.company_name);
+          localStorage.setItem('company_name', res.data.company_name);
+          document.title = `${res.data.company_name} - Attendance Management System`;
+        }
+        if (res.data.company_logo) {
+          setCompanyLogo(res.data.company_logo);
+          localStorage.setItem('company_logo', res.data.company_logo);
+          updateFavicon(res.data.company_logo);
+        }
+      })
+      .catch(err => console.error('Failed to load settings', err));
   }, []);
+
+  // Auto-detect location on load or when profile is fetched
+  useEffect(() => {
+    if (employeeProfile) {
+      handleDetectClosestBranch();
+    }
+  }, [employeeProfile]);
 
   const handleCloseSuccessModal = () => {
     setShowSuccessModal(false);
@@ -190,7 +243,11 @@ export default function ScanHub() {
     setResult(null);
   };
 
-  const submitScan = async (token: string, lat: number, lon: number, explicitType: 'CHECK_IN' | 'CHECK_OUT') => {
+  const submitScan = async (token: string, lat: number | null, lon: number | null, explicitType: 'CHECK_IN' | 'CHECK_OUT') => {
+    if (lat === null || lon === null) {
+      setError("មិនអាចស្កែនបានទេ ដោយសារមិនមានព័ត៌មានទីតាំង GPS ពិតប្រាកដ / Cannot scan without valid GPS coordinates. Make sure location services are enabled and HTTPS is used.");
+      return;
+    }
     setLoading(true);
     setError(null);
     setResult(null);
@@ -488,11 +545,16 @@ export default function ScanHub() {
   return (
     <div className="flex flex-col gap-6 max-w-xl mx-auto w-full">
       {/* Header */}
-      <div className="text-center py-2">
+      <div className="text-center py-2 flex flex-col items-center gap-2">
+        {companyLogo ? (
+          <div className="w-16 h-16 bg-white rounded-2xl border border-slate-200 shadow-sm flex items-center justify-center overflow-hidden">
+            <img src={companyLogo} alt="Logo" className="w-full h-full object-contain p-1" />
+          </div>
+        ) : null}
         <h1 className="text-2xl font-black text-slate-900 tracking-tight">
-          ស្កែនវត្តមានទូរស័ព្ទ / Employee Scan Hub
+          {companyName === 'Employee Scan Hub' ? 'ស្កែនវត្តមានទូរស័ព្ទ / Employee Scan Hub' : companyName}
         </h1>
-        <p className="text-slate-500 text-[10px] font-bold mt-1 uppercase tracking-wider">
+        <p className="text-slate-500 text-[10px] font-bold mt-0.5 uppercase tracking-wider">
           សូមផ្ទៀងផ្ទាត់ទីតាំង និងស្កែន QR Code ដើម្បីកត់ត្រាវត្តមាន
         </p>
       </div>
@@ -542,66 +604,72 @@ export default function ScanHub() {
           type="button"
           onClick={handleDetectClosestBranch}
           disabled={detectingLocation}
-          className="w-full py-3 px-4 bg-slate-900 hover:bg-slate-800 text-white disabled:bg-slate-400 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 shadow-sm"
+          className={`w-full py-3.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 text-white ${
+            detectingLocation 
+              ? 'bg-slate-700 disabled:opacity-80' 
+              : !closestBranch
+                ? 'bg-indigo-600 hover:bg-indigo-700 active:scale-98 shadow-md shadow-indigo-600/10'
+                : closestBranch.inRange
+                  ? 'bg-emerald-600 hover:bg-emerald-700 active:scale-98 shadow-md shadow-emerald-600/15'
+                  : 'bg-rose-600 hover:bg-rose-700 active:scale-98 shadow-md shadow-rose-600/15'
+          }`}
         >
           {detectingLocation ? (
             <Loader2 className="animate-spin" size={14} />
           ) : (
-            <MapPin size={14} className="text-blue-400 animate-bounce" />
+            <MapPin size={14} className="animate-bounce" />
           )}
-          <span>{detectingLocation ? 'កំពុងចាប់ទីតាំង...' : 'ពិនិត្យ/ចាប់យកទីតាំង (Check Proximity)'}</span>
+          <span>
+            {detectingLocation 
+              ? 'កំពុងចាប់ទីតាំង GPS... / Detecting GPS Location...' 
+              : !closestBranch
+                ? '📍 ចាប់យកទីតាំងឥឡូវនេះ / Click GPS Now'
+                : closestBranch.inRange
+                  ? '🟢 ស្ថិតក្នុងរង្វង់អនុញ្ញាត / In Range (OK) - Click to Refresh'
+                  : '🔴 នៅក្រៅរង្វង់អនុញ្ញាត / Out of Range (Blocked) - Click to Retry'}
+          </span>
         </button>
 
         {closestBranch ? (
           <div className="flex flex-col gap-3">
-            <div className={`p-4 rounded-xl border text-left flex flex-col gap-2.5 ${
+            <div className={`p-4 rounded-xl border text-left flex flex-col gap-2 ${
               closestBranch.inRange 
-                ? 'bg-emerald-50/70 border-emerald-200 text-emerald-800' 
-                : 'bg-rose-50/70 border-rose-200 text-rose-800'
+                ? 'bg-emerald-50/50 border-emerald-100 text-emerald-800' 
+                : 'bg-rose-50/50 border-rose-100 text-rose-800'
             }`}>
-              <p className="text-xs font-bold flex items-center gap-1.5">
-                <CheckCircle size={14} className={closestBranch.inRange ? 'text-emerald-600' : 'text-rose-600'} />
-                <span>ទីតាំងជិតបំផុត៖ <strong>{closestBranch.name}</strong></span>
-              </p>
-              
-              <div className="text-[11px] font-semibold flex flex-col gap-1 ml-5">
-                <span>ចម្ងាយ៖ <strong>{Math.round(closestBranch.distance)} ម៉ែត្រ</strong></span>
-                <span className="font-bold">
-                  {closestBranch.inRange 
-                    ? '🟢 ស្ថិតក្នុងរង្វង់អនុញ្ញាត (In Range - OK)' 
-                    : '🔴 នៅក្រៅរង្វង់អនុញ្ញាត (Too Far - Blocked)'}
+              <div className="flex justify-between items-center text-xs font-bold">
+                <span className="flex items-center gap-1.5">
+                  <MapPin size={14} className={closestBranch.inRange ? 'text-emerald-600' : 'text-rose-600'} />
+                  <span>ទីតាំងជិតបំផុត៖ <strong>{closestBranch.name}</strong></span>
                 </span>
+                <span>ចម្ងាយ៖ <strong>{Math.round(closestBranch.distance)} ម៉ែត្រ</strong></span>
               </div>
-
-              {closestBranch.inRange && (
-                <div className="mt-2 pt-2 border-t border-emerald-200/50 flex flex-col gap-1 text-[11px] font-bold text-emerald-900">
-                  <span className="bg-emerald-100/80 px-2.5 py-1 rounded-lg w-fit text-[10px] text-emerald-800">
-                    📍 វត្តមាននៅ៖ {closestBranch.name} (Active Terminal)
-                  </span>
-                  <span className="leading-relaxed mt-0.5">
-                    👉 សូមស្កែនកូដ QR ដែលបង្ហាញលើអេក្រង់ធំនៅច្រកចូលនៃ {closestBranch.name} ដើម្បីកត់ត្រាវត្តមាន។
-                  </span>
-                  <span className="text-[9px] text-emerald-600 font-semibold uppercase tracking-wider">
-                    Please scan the QR code displayed on the entrance screen at {closestBranch.name}
-                  </span>
+              
+              {closestBranch.inRange ? (
+                <div className="mt-1 pt-2 border-t border-emerald-100/50 text-[11px] font-medium leading-relaxed">
+                  <span className="text-emerald-700">📍 សកម្ម៖ អនុញ្ញាតឱ្យស្កែនវត្តមានបាន។ សូមស្កែនកូដ QR នៅច្រកចូល។</span>
+                </div>
+              ) : (
+                <div className="mt-1 pt-2 border-t border-rose-100/50 text-[11px] font-medium leading-relaxed">
+                  <span className="text-rose-700">⚠️ មិនអនុញ្ញាត៖ ចម្ងាយឆ្ងាយពេក (លើសពី {closestBranch.radius} ម៉ែត្រ)។ សូមធ្វើដំណើរទៅកាន់សាខា។</span>
                 </div>
               )}
             </div>
             
             {locationWarning && (
-              <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-amber-800 text-[11px] font-semibold text-left leading-relaxed">
+              <div className="p-3 bg-amber-50 border border-amber-100 rounded-xl text-amber-800 text-[11px] font-medium text-left leading-relaxed">
                 {locationWarning}
               </div>
             )}
 
             {employeeProfile?.branch?.name && !closestBranch.name.includes(employeeProfile.branch.name) && (
-              <div className="p-3 bg-rose-55/90 border border-rose-200 rounded-xl text-rose-900 text-[11px] font-semibold text-left leading-relaxed">
-                ⚠️ <strong>ទីតាំងមិនត្រឹមត្រូវ៖</strong> សាខាដែលបានកំណត់របស់អ្នកគឺ <strong>{employeeProfile.branch.name}</strong> ប៉ុន្តែអ្នកកំពុងស្ថិតនៅក្បែរ <strong>{closestBranch.name}</strong>។ អ្នកនឹងមិនអាចស្កែនវត្តមាននៅទីនេះបានទេ។ / Warning: Your assigned branch is {employeeProfile.branch.name} but your current location is near {closestBranch.name}.
+              <div className="p-3 bg-rose-50/50 border border-rose-100 rounded-xl text-rose-800 text-[11px] font-medium text-left leading-relaxed">
+                ⚠️ <strong>សាខាមិនត្រឹមត្រូវ៖</strong> សាខាដែលបានកំណត់គឺ <strong>{employeeProfile.branch.name}</strong> ប៉ុន្តែទីតាំងបច្ចុប្បន្នគឺ <strong>{closestBranch.name}</strong>។
               </div>
             )}
           </div>
         ) : (
-          <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-center text-slate-500 text-xs font-medium">
+          <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl text-center text-slate-500 text-xs font-medium">
             📍 សូមចុចប៊ូតុងខាងលើ ដើម្បីស្វែងរកទីតាំង និងវាស់ចម្ងាយទៅកាន់សាខាជិតបំផុត។
           </div>
         )}
@@ -618,9 +686,9 @@ export default function ScanHub() {
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <button
             type="button"
-            disabled={loading || cameraActive}
+            disabled={loading || cameraActive || (!closestBranch?.inRange && !(isAdmin || simulateLocation))}
             onClick={() => handleScanClick('CHECK_IN')}
-            className="py-6 px-6 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-base transition-all flex flex-col items-center justify-center gap-3 cursor-pointer shadow-md shadow-emerald-600/20 active:scale-95 disabled:opacity-50"
+            className="py-6 px-6 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-base transition-all flex flex-col items-center justify-center gap-3 cursor-pointer shadow-md shadow-emerald-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <LogIn size={32} />
             <span>Check In (ចូលបំពេញការងារ)</span>
@@ -628,9 +696,9 @@ export default function ScanHub() {
 
           <button
             type="button"
-            disabled={loading || cameraActive}
+            disabled={loading || cameraActive || (!closestBranch?.inRange && !(isAdmin || simulateLocation))}
             onClick={() => handleScanClick('CHECK_OUT')}
-            className="py-6 px-6 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-black text-base transition-all flex flex-col items-center justify-center gap-3 cursor-pointer shadow-md shadow-rose-600/20 active:scale-95 disabled:opacity-50"
+            className="py-6 px-6 bg-rose-600 hover:bg-rose-700 text-white rounded-2xl font-black text-base transition-all flex flex-col items-center justify-center gap-3 cursor-pointer shadow-md shadow-rose-600/20 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <LogOut size={32} />
             <span>Check Out (ចេញពីការងារ)</span>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
 import { Lock, Mail, Users, ShieldAlert, Loader2 } from 'lucide-react';
@@ -9,6 +9,44 @@ export default function Login() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const navigate = useNavigate();
+
+  const [companyName, setCompanyName] = useState(localStorage.getItem('company_name') || 'AMS Enterprise');
+  const [companyLogo, setCompanyLogo] = useState(localStorage.getItem('company_logo') || '');
+
+  const updateFavicon = (logoUrl: string) => {
+    const link = (document.querySelector("link[rel*='icon']") as HTMLLinkElement) || document.createElement('link');
+    link.type = logoUrl.startsWith('data:image/svg') ? 'image/svg+xml' : 'image/x-icon';
+    link.rel = 'shortcut icon';
+    link.href = logoUrl || '/favicon.svg';
+    if (!document.querySelector("link[rel*='icon']")) {
+      document.getElementsByTagName('head')[0].appendChild(link);
+    }
+  };
+
+  useEffect(() => {
+    const initialName = localStorage.getItem('company_name');
+    if (initialName) {
+      document.title = `${initialName} - Attendance Management System`;
+    }
+    const initialLogo = localStorage.getItem('company_logo');
+    if (initialLogo) {
+      updateFavicon(initialLogo);
+    }
+    api.get('/settings/public')
+      .then(res => {
+        if (res.data.company_name) {
+          setCompanyName(res.data.company_name);
+          localStorage.setItem('company_name', res.data.company_name);
+          document.title = `${res.data.company_name} - Attendance Management System`;
+        }
+        if (res.data.company_logo) {
+          setCompanyLogo(res.data.company_logo);
+          localStorage.setItem('company_logo', res.data.company_logo);
+          updateFavicon(res.data.company_logo);
+        }
+      })
+      .catch(err => console.error('Failed to load public settings', err));
+  }, []);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -62,11 +100,17 @@ export default function Login() {
       <div className="absolute bottom-[-10%] right-[-10%] w-[40vw] h-[40vw] bg-emerald-600/10 rounded-full blur-3xl"></div>
 
       <div className="w-full max-w-md z-10">
-        <div className="text-center mb-8">
-          <div className="inline-flex p-3 bg-blue-650/20 text-blue-400 rounded-2xl mb-4 border border-blue-500/20 shadow-[0_0_15px_rgba(59,130,246,0.3)]">
-            <Users size={32} />
-          </div>
-          <h1 className="text-3xl font-extrabold text-white tracking-tight">AMS Enterprise</h1>
+        <div className="text-center mb-8 flex flex-col items-center">
+          {companyLogo ? (
+            <div className="w-20 h-20 bg-white rounded-2xl mb-4 border border-white/10 shadow-[0_0_15px_rgba(255,255,255,0.1)] flex items-center justify-center overflow-hidden">
+              <img src={companyLogo} alt="Logo" className="w-full h-full object-contain p-1.5" />
+            </div>
+          ) : (
+            <div className="inline-flex p-3 bg-blue-650/20 text-blue-400 rounded-2xl mb-4 border border-blue-500/20 shadow-[0_0_15px_rgba(59,130,246,0.3)]">
+              <Users size={32} />
+            </div>
+          )}
+          <h1 className="text-3xl font-extrabold text-white tracking-tight">{companyName}</h1>
           <p className="text-slate-400 mt-2 text-sm font-medium">ប្រព័ន្ធគ្រប់គ្រងវត្តមានបុគ្គលិកកម្រិតខ្ពស់</p>
         </div>
 

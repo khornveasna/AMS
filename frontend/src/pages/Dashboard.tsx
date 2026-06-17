@@ -27,7 +27,7 @@ export default function Dashboard() {
   const fetchDashboardData = async () => {
     try {
       setLoading(true);
-      const res = await api.get('/attendance/dashboard-reports');
+      const res = await api.get('/attendance/dashboard-reports?kpisOnly=true');
       setKpis(res.data.kpis);
 
       const historyRes = await api.get('/attendance/history');

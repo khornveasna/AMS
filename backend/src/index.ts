@@ -3,6 +3,9 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import jwt from 'jsonwebtoken';
 import bcrypt from 'bcrypt';
+import fs from 'fs';
+import path from 'path';
+import cron from 'node-cron';
 import { PrismaClient, Role, AttendanceStatus } from '@prisma/client';
 
 dotenv.config();
@@ -46,6 +49,112 @@ function formatCambodiaTime(date: Date | string) {
   return `${h}:${m}`;
 }
 
+function getCambodiaDateString(date: Date | string) {
+  const kh = getCambodiaTime(date);
+  const y = kh.getUTCFullYear();
+  const m = (kh.getUTCMonth() + 1).toString().padStart(2, '0');
+  const d = kh.getUTCDate().toString().padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function normalizeTimeTo24h(timeStr: string): string {
+  if (!timeStr) return '';
+  timeStr = timeStr.trim().toUpperCase();
+  const match = timeStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/);
+  if (!match) {
+    throw new Error(`Invalid time format: ${timeStr}. Expected HH:mm in 24-hour format or with AM/PM.`);
+  }
+  let hours = parseInt(match[1], 10);
+  const minutes = parseInt(match[2], 10);
+  const ampm = match[3];
+
+  if (minutes < 0 || minutes > 59) {
+    throw new Error(`Invalid minutes in time: ${timeStr}`);
+  }
+
+  if (ampm) {
+    if (hours < 1 || hours > 12) {
+      throw new Error(`Invalid 12-hour format: ${timeStr}`);
+    }
+    if (ampm === 'PM' && hours < 12) {
+      hours += 12;
+    }
+    if (ampm === 'AM' && hours === 12) {
+      hours = 0;
+    }
+  } else {
+    if (hours < 0 || hours > 23) {
+      throw new Error(`Invalid 24-hour format: ${timeStr}`);
+    }
+  }
+
+  const hStr = hours.toString().padStart(2, '0');
+  const mStr = minutes.toString().padStart(2, '0');
+  return `${hStr}:${mStr}`;
+}
+
+async function normalizeExistingTimetables() {
+  try {
+    const timetables = await prisma.timetable.findMany();
+    for (const tt of timetables) {
+      try {
+        const normOnDuty = normalizeTimeTo24h(tt.onDutyTime);
+        const normOffDuty = normalizeTimeTo24h(tt.offDutyTime);
+        const normBeginningIn = normalizeTimeTo24h(tt.beginningIn);
+        const normEndingIn = normalizeTimeTo24h(tt.endingIn);
+        const normBeginningOut = normalizeTimeTo24h(tt.beginningOut);
+        const normEndingOut = normalizeTimeTo24h(tt.endingOut);
+
+        if (
+          normOnDuty !== tt.onDutyTime ||
+          normOffDuty !== tt.offDutyTime ||
+          normBeginningIn !== tt.beginningIn ||
+          normEndingIn !== tt.endingIn ||
+          normBeginningOut !== tt.beginningOut ||
+          normEndingOut !== tt.endingOut
+        ) {
+          await prisma.timetable.update({
+            where: { id: tt.id },
+            data: {
+              onDutyTime: normOnDuty,
+              offDutyTime: normOffDuty,
+              beginningIn: normBeginningIn,
+              endingIn: normEndingIn,
+              beginningOut: normBeginningOut,
+              endingOut: normEndingOut
+            }
+          });
+          console.log(`Normalized timetable ${tt.name} to 24-hour format.`);
+        }
+      } catch (err: any) {
+        console.error(`Failed to normalize timetable ${tt.name}: ${err.message}`);
+      }
+    }
+
+    const shifts = await prisma.shift.findMany();
+    for (const s of shifts) {
+      try {
+        const normStart = normalizeTimeTo24h(s.startTime);
+        const normEnd = normalizeTimeTo24h(s.endTime);
+        if (normStart !== s.startTime || normEnd !== s.endTime) {
+          await prisma.shift.update({
+            where: { id: s.id },
+            data: {
+              startTime: normStart,
+              endTime: normEnd
+            }
+          });
+          console.log(`Normalized shift ${s.name} to 24-hour format.`);
+        }
+      } catch (err: any) {
+        console.error(`Failed to normalize shift ${s.name}: ${err.message}`);
+      }
+    }
+  } catch (err: any) {
+    console.error(`Failed to load timetables/shifts for normalization: ${err.message}`);
+  }
+}
+
 // Authentication Middleware
 interface AuthenticatedRequest extends Request {
   user?: {
@@ -72,6 +181,13 @@ function authenticateToken(req: AuthenticatedRequest, res: Response, next: NextF
 function requireAdmin(req: AuthenticatedRequest, res: Response, next: NextFunction) {
   if (req.user?.role !== Role.ADMIN) {
     return res.status(403).json({ error: 'Admin access required' });
+  }
+  next();
+}
+
+function requireSuperAdmin(req: AuthenticatedRequest, res: Response, next: NextFunction) {
+  if (req.user?.role !== Role.ADMIN || req.user?.email !== 'superadmin@gmail.com') {
+    return res.status(403).json({ error: 'SuperAdmin access required' });
   }
   next();
 }
@@ -236,7 +352,13 @@ app.delete('/api/departments/:id', authenticateToken, requireAdmin, async (req: 
 app.get('/api/employees', authenticateToken, async (req: Request, res: Response) => {
   try {
     const employees = await prisma.employee.findMany({
-      include: { department: true, branch: true },
+      include: { 
+        department: true, 
+        branch: true,
+        timetables: {
+          select: { id: true }
+        }
+      },
       orderBy: { name: 'asc' }
     });
     res.json(employees);
@@ -252,8 +374,24 @@ app.post('/api/employees', authenticateToken, requireAdmin, async (req: Request,
       employeeIdCode, photo, gender, nationality, phone, jobTitle, dob, dateOfEmployment 
     } = req.body;
 
-    if (!name || !email || !password || !departmentId) {
-      return res.status(400).json({ error: 'Missing required fields' });
+    let targetDeptId = departmentId;
+    if (role === 'ADMIN') {
+      if (!name || !email || !password) {
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
+      if (!targetDeptId) {
+        const firstDept = await prisma.department.findFirst();
+        if (firstDept) {
+          targetDeptId = firstDept.id;
+        } else {
+          const newDept = await prisma.department.create({ data: { name: 'Administration' } });
+          targetDeptId = newDept.id;
+        }
+      }
+    } else {
+      if (!name || !email || !password || !targetDeptId) {
+        return res.status(400).json({ error: 'Missing required fields' });
+      }
     }
 
     const existing = await prisma.employee.findUnique({ where: { email } });
@@ -273,7 +411,7 @@ app.post('/api/employees', authenticateToken, requireAdmin, async (req: Request,
         email,
         password: hashedPassword,
         role: role === 'ADMIN' ? Role.ADMIN : Role.EMPLOYEE,
-        departmentId,
+        departmentId: targetDeptId,
         branchId: branchId || null,
         employeeIdCode,
         photo,
@@ -408,15 +546,23 @@ app.post('/api/timetables', authenticateToken, requireAdmin, async (req: Request
     if (!name || !onDutyTime || !offDutyTime) {
       return res.status(400).json({ error: 'Name, On-Duty, and Off-Duty times are required' });
     }
+
+    const normOnDuty = normalizeTimeTo24h(onDutyTime);
+    const normOffDuty = normalizeTimeTo24h(offDutyTime);
+    const normBeginningIn = normalizeTimeTo24h(beginningIn || '07:00');
+    const normEndingIn = normalizeTimeTo24h(endingIn || '09:30');
+    const normBeginningOut = normalizeTimeTo24h(beginningOut || '11:00');
+    const normEndingOut = normalizeTimeTo24h(endingOut || '13:00');
+
     const timetable = await prisma.timetable.create({
       data: {
         name,
-        onDutyTime,
-        offDutyTime,
-        beginningIn: beginningIn || '07:00',
-        endingIn: endingIn || '09:30',
-        beginningOut: beginningOut || '11:00',
-        endingOut: endingOut || '13:00',
+        onDutyTime: normOnDuty,
+        offDutyTime: normOffDuty,
+        beginningIn: normBeginningIn,
+        endingIn: normEndingIn,
+        beginningOut: normBeginningOut,
+        endingOut: normEndingOut,
         lateTime: Number(lateTime !== undefined ? lateTime : 15),
         leaveEarly: Number(leaveEarly !== undefined ? leaveEarly : 15),
         workdayCount: Number(workdayCount !== undefined ? workdayCount : 1.0),
@@ -427,23 +573,31 @@ app.post('/api/timetables', authenticateToken, requireAdmin, async (req: Request
     });
     res.status(201).json(timetable);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
 app.put('/api/timetables/:id', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
   try {
     const { name, onDutyTime, offDutyTime, beginningIn, endingIn, beginningOut, endingOut, lateTime, leaveEarly, workdayCount, color, mustIn, mustOut } = req.body;
+    
+    const normOnDuty = normalizeTimeTo24h(onDutyTime);
+    const normOffDuty = normalizeTimeTo24h(offDutyTime);
+    const normBeginningIn = normalizeTimeTo24h(beginningIn);
+    const normEndingIn = normalizeTimeTo24h(endingIn);
+    const normBeginningOut = normalizeTimeTo24h(beginningOut);
+    const normEndingOut = normalizeTimeTo24h(endingOut);
+
     const timetable = await prisma.timetable.update({
       where: { id: req.params.id },
       data: {
         name,
-        onDutyTime,
-        offDutyTime,
-        beginningIn,
-        endingIn,
-        beginningOut,
-        endingOut,
+        onDutyTime: normOnDuty,
+        offDutyTime: normOffDuty,
+        beginningIn: normBeginningIn,
+        endingIn: normEndingIn,
+        beginningOut: normBeginningOut,
+        endingOut: normEndingOut,
         lateTime: Number(lateTime),
         leaveEarly: Number(leaveEarly),
         workdayCount: Number(workdayCount),
@@ -454,7 +608,7 @@ app.put('/api/timetables/:id', authenticateToken, requireAdmin, async (req: Requ
     });
     res.json(timetable);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
@@ -489,8 +643,8 @@ app.post('/api/shifts', authenticateToken, requireAdmin, async (req: Request, re
     if (!name) {
       return res.status(400).json({ error: 'Shift name is required' });
     }
-    const firstTimeStr = startTime || '08:00';
-    const lastTimeStr = endTime || '17:00';
+    const firstTimeStr = normalizeTimeTo24h(startTime || '08:00');
+    const lastTimeStr = normalizeTimeTo24h(endTime || '17:00');
 
     const shift = await prisma.shift.create({
       data: {
@@ -520,19 +674,22 @@ app.post('/api/shifts', authenticateToken, requireAdmin, async (req: Request, re
 
     res.status(201).json(updatedShift);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
 app.put('/api/shifts/:id', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
   try {
     const { name, dayTimetables, startTime, endTime, gracePeriod } = req.body;
+    const firstTimeStr = normalizeTimeTo24h(startTime || '08:00');
+    const lastTimeStr = normalizeTimeTo24h(endTime || '17:00');
+
     const shift = await prisma.shift.update({
       where: { id: req.params.id },
       data: {
         name,
-        startTime: startTime || '08:00',
-        endTime: endTime || '17:00',
+        startTime: firstTimeStr,
+        endTime: lastTimeStr,
         gracePeriod: Number(gracePeriod || 15)
       }
     });
@@ -560,7 +717,7 @@ app.put('/api/shifts/:id', authenticateToken, requireAdmin, async (req: Request,
 
     res.json(updatedShift);
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    res.status(400).json({ error: err.message });
   }
 });
 
@@ -704,6 +861,75 @@ app.post('/api/schedules/bulk-update', authenticateToken, requireAdmin, async (r
 });
 
 // ==========================================
+// 4b. EMPLOYEE TIMETABLE ROUTES
+// ==========================================
+
+app.get('/api/employees/:id/timetables', authenticateToken, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const employeeTimetables = await prisma.employeeTimetable.findMany({
+      where: { employeeId: id },
+      include: { timetable: true }
+    });
+    res.json(employeeTimetables);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/employees/:id/timetables', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { timetableId, daysOfWeek } = req.body;
+
+    if (!timetableId || !Array.isArray(daysOfWeek) || daysOfWeek.length === 0) {
+      return res.status(400).json({ error: 'Missing timetableId or daysOfWeek' });
+    }
+
+    const results = [];
+    for (const day of daysOfWeek) {
+      const existing = await prisma.employeeTimetable.findFirst({
+        where: {
+          employeeId: id,
+          dayOfWeek: Number(day),
+          timetableId
+        }
+      });
+
+      if (!existing) {
+        const record = await prisma.employeeTimetable.create({
+          data: {
+            employeeId: id,
+            dayOfWeek: Number(day),
+            timetableId
+          }
+        });
+        results.push(record);
+      }
+    }
+
+    res.status(201).json(results);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/employees/:id/timetables/:timetableId', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { id, timetableId } = req.params;
+    await prisma.employeeTimetable.deleteMany({
+      where: {
+        employeeId: id,
+        timetableId
+      }
+    });
+    res.json({ message: 'Timetable removed from employee successfully' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==========================================
 // 5. MAINTENANCE TIMETABLE ROUTES
 // ==========================================
 
@@ -746,6 +972,26 @@ app.delete('/api/maintenance/:id', authenticateToken, requireAdmin, async (req: 
 // ==========================================
 // 6. SYSTEM SETTINGS ROUTES
 // ==========================================
+
+app.get('/api/settings/public', async (req: Request, res: Response) => {
+  try {
+    const settings = await prisma.systemSetting.findMany({
+      where: {
+        key: {
+          in: ['company_name', 'company_logo']
+        }
+      }
+    });
+    const map: Record<string, string> = {
+      company_name: 'AMS SYSTEM',
+      company_logo: ''
+    };
+    settings.forEach(s => { map[s.key] = s.value; });
+    res.json(map);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 app.get('/api/settings', authenticateToken, async (req: Request, res: Response) => {
   try {
@@ -989,14 +1235,17 @@ app.post('/api/attendance/scan', authenticateToken, async (req: AuthenticatedReq
     }
 
     // 4. Determine Attendance Status & Timetable matching based on schedule
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(todayStart.getTime() + 24 * 60 * 60 * 1000);
+    const nowCambodiaStr = getCambodiaDateString(now);
 
-    const schedules = await prisma.schedule.findMany({
+    // Query schedules and check-ins within a 4-day sliding window to bypass timezone discrepancies,
+    // and filter them strictly using getCambodiaDateString in memory.
+    const windowStart = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000);
+    const windowEnd = new Date(now.getTime() + 2 * 24 * 60 * 60 * 1000);
+
+    const schedules = (await prisma.schedule.findMany({
       where: {
         employeeId,
-        date: { gte: todayStart, lt: todayEnd }
+        date: { gte: windowStart, lte: windowEnd }
       },
       include: {
         shift: {
@@ -1007,22 +1256,40 @@ app.post('/api/attendance/scan', authenticateToken, async (req: AuthenticatedReq
           }
         }
       }
-    });
+    })).filter(sched => getCambodiaDateString(sched.date) === nowCambodiaStr);
+
+    const getAttendancesForToday = async () => {
+      const atts = await prisma.attendance.findMany({
+        where: {
+          employeeId,
+          checkIn: { gte: windowStart, lte: windowEnd }
+        }
+      });
+      return atts.filter(att => getCambodiaDateString(att.checkIn) === nowCambodiaStr);
+    };
 
     const dayOfWeek = now.getDay(); // 0 = Sunday, 1 = Monday, ... 6 = Saturday
-    const timetablesForToday: any[] = [];
-    schedules.forEach(sched => {
-      const tts = sched.shift.dayTimetables
-        .filter((dt) => dt.dayOfWeek === dayOfWeek)
-        .map((dt) => dt.timetable);
-      timetablesForToday.push(...tts);
+    const employeeTimetablesForToday = await prisma.employeeTimetable.findMany({
+      where: {
+        employeeId,
+        dayOfWeek
+      },
+      include: { timetable: true }
     });
+    const timetablesForToday = employeeTimetablesForToday.map(et => et.timetable);
+
+    if (schedules.length === 0) {
+      return await logFailure('មិនទាន់មានកាលវិភាគការងារត្រូវបានកំណត់សម្រាប់អ្នកនៅថ្ងៃនេះទេ! សូមទាក់ទងផ្នែករដ្ឋបាល / No work schedule assigned to you for today! Please contact admin.');
+    }
+
+    if (timetablesForToday.length === 0) {
+      return await logFailure('មិនមានម៉ោងការងារសម្រាប់អ្នកនៅថ្ងៃនេះទេ (ថ្ងៃសម្រាក/Off-day)! / No work hours scheduled for you today (Off-day)!');
+    }
 
     const timeStringToDate = (timeStr: string) => {
       const [h, m] = timeStr.split(':').map(Number);
-      const d = new Date(now.getTime());
-      d.setHours(h, m, 0, 0);
-      return d;
+      const dateStr = `${nowCambodiaStr}T${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:00+07:00`;
+      return new Date(dateStr);
     };
 
     let matchedTimetableForCheckIn: any = null;
@@ -1045,28 +1312,16 @@ app.post('/api/attendance/scan', authenticateToken, async (req: AuthenticatedReq
     // Check if employee is scanning too early for check-in
     let isPerformingCheckOut = scanType === 'CHECK_OUT';
     if (!isPerformingCheckOut && matchedTimetableForCheckOut) {
-      const activeAtt = await prisma.attendance.findFirst({
-        where: {
-          employeeId,
-          timetableId: matchedTimetableForCheckOut.id,
-          checkIn: { gte: todayStart, lt: todayEnd },
-          checkOut: null
-        }
-      });
+      const todayAtts = await getAttendancesForToday();
+      const activeAtt = todayAtts.find(a => a.timetableId === matchedTimetableForCheckOut.id && a.checkOut === null);
       if (activeAtt) {
         isPerformingCheckOut = true;
       }
     }
 
     if (!isPerformingCheckOut && timetablesForToday.length > 0) {
-      const alreadyCheckedIn = await prisma.attendance.findMany({
-        where: {
-          employeeId,
-          checkIn: { gte: todayStart, lt: todayEnd }
-        },
-        select: { timetableId: true }
-      });
-      const alreadyCheckedInIds = alreadyCheckedIn.map((a) => a.timetableId).filter(Boolean);
+      const todayAtts = await getAttendancesForToday();
+      const alreadyCheckedInIds = todayAtts.map((a) => a.timetableId).filter(Boolean);
 
       const remainingTimetables = timetablesForToday
         .filter((tt) => !alreadyCheckedInIds.includes(tt.id))
@@ -1086,290 +1341,66 @@ app.post('/api/attendance/scan', authenticateToken, async (req: AuthenticatedReq
       }
     }
 
-    // Explicit manual scanType logic overrides automatic timetable detection windows
+    // Explicit manual scanType logic strictly validating against defined timetable windows
     if (scanType === 'CHECK_OUT') {
-      let activeAttForOut: any = null;
-      let matchedTtName = '';
-
-      if (matchedTimetableForCheckOut) {
-        activeAttForOut = await prisma.attendance.findFirst({
-          where: {
-            employeeId,
-            timetableId: matchedTimetableForCheckOut.id,
-            checkIn: { gte: todayStart, lt: todayEnd },
-            checkOut: null
-          }
-        });
-        matchedTtName = matchedTimetableForCheckOut.name;
+      if (!matchedTimetableForCheckOut) {
+        const allowedWindows = timetablesForToday.map(tt => `${tt.name}: ${tt.beginningOut}-${tt.endingOut}`).join(', ');
+        return await logFailure(
+          `មិនស្ថិតក្នុងម៉ោងអនុញ្ញាតឱ្យស្កែនចេញទេ! (ម៉ោងស្កែនចេញ៖ ${allowedWindows}) / Outside allowed check-out window! Allowed windows: ${allowedWindows}`
+        );
       }
+
+      const todayAtts = await getAttendancesForToday();
+      const activeAttForOut = todayAtts.find(a => a.timetableId === matchedTimetableForCheckOut.id && a.checkOut === null);
 
       if (!activeAttForOut) {
-        activeAttForOut = await prisma.attendance.findFirst({
-          where: {
-            employeeId,
-            checkIn: { gte: todayStart, lt: todayEnd },
-            checkOut: null
-          },
-          orderBy: { checkIn: 'desc' }
-        });
+        return await logFailure(
+          `រកមិនឃើញទិន្នន័យ Check In សម្រាប់វេន ${matchedTimetableForCheckOut.name} ទេ! / No active Check In found for ${matchedTimetableForCheckOut.name}!`
+        );
       }
 
-      if (activeAttForOut) {
-        const updated = await prisma.attendance.update({
-          where: { id: activeAttForOut.id },
-          data: { checkOut: now }
-        });
-        return res.json({
-          type: 'CHECK_OUT',
-          message: matchedTtName 
-            ? `Checked out successfully for ${matchedTtName}` 
-            : 'Checked out successfully',
-          attendance: updated,
-          distance
-        });
-      } else {
-        return res.status(400).json({ error: 'រកមិនឃើញទិន្នន័យ Check In សម្រាប់ថ្ងៃនេះទេ! / No active Check In found for today!' });
-      }
-    }
-
-    if (scanType === 'CHECK_IN') {
-      if (matchedTimetableForCheckIn) {
-        const existingAtt = await prisma.attendance.findFirst({
-          where: {
-            employeeId,
-            timetableId: matchedTimetableForCheckIn.id,
-            checkIn: { gte: todayStart, lt: todayEnd }
-          }
-        });
-
-        if (existingAtt) {
-          return res.status(400).json({ error: 'អ្នកបានស្កែន Check In រួចរាល់ហើយសម្រាប់វេននេះ! / You have already checked in for this timetable today!' });
-        }
-
-        const dutyTime = timeStringToDate(matchedTimetableForCheckIn.onDutyTime);
-        const diffMs = now.getTime() - dutyTime.getTime();
-        const diffMinutes = Math.floor(diffMs / (60 * 1000));
-
-        let status: AttendanceStatus = AttendanceStatus.ON_TIME;
-        let lateMinutes = 0;
-        if (diffMinutes > matchedTimetableForCheckIn.lateTime) {
-          status = AttendanceStatus.LATE;
-          lateMinutes = diffMinutes;
-        }
-
-        const attendance = await prisma.attendance.create({
-          data: {
-            employeeId: employeeId!,
-            timetableId: matchedTimetableForCheckIn.id,
-            latitude,
-            longitude,
-            distance,
-            status,
-            checkIn: now,
-            branchId
-          }
-        });
-        return res.json({
-          type: 'CHECK_IN',
-          message: status === AttendanceStatus.LATE 
-            ? `Checked in successfully for ${matchedTimetableForCheckIn.name} (LATE by ${lateMinutes} mins)` 
-            : `Checked in successfully for ${matchedTimetableForCheckIn.name} (ON TIME)`,
-          attendance,
-          distance
-        });
-      }
-
-      // Fallback general check-in
-      let status: AttendanceStatus = AttendanceStatus.ON_TIME;
-      let lateMinutes = 0;
-      let targetTimetableId: string | null = null;
-
-      if (timetablesForToday.length > 0) {
-        const alreadyAttendedIds = (await prisma.attendance.findMany({
-          where: {
-            employeeId,
-            checkIn: { gte: todayStart, lt: todayEnd }
-          },
-          select: { timetableId: true }
-        })).map(a => a.timetableId).filter(Boolean);
-
-        const nextTimetable = timetablesForToday.find(t => !alreadyAttendedIds.includes(t.id)) || timetablesForToday[0];
-        targetTimetableId = nextTimetable.id;
-
-        const dutyTime = timeStringToDate(nextTimetable.onDutyTime);
-        const diffMs = now.getTime() - dutyTime.getTime();
-        const diffMinutes = Math.floor(diffMs / (60 * 1000));
-        if (diffMinutes > nextTimetable.lateTime) {
-          status = AttendanceStatus.LATE;
-          lateMinutes = diffMinutes;
-        }
-      } else if (schedules.length > 0) {
-        const shift = schedules[0].shift;
-        const [shiftHour, shiftMin] = shift.startTime.split(':').map(Number);
-        const shiftTime = new Date(now.getTime());
-        shiftTime.setHours(shiftHour, shiftMin, 0, 0);
-
-        const diffMs = now.getTime() - shiftTime.getTime();
-        const diffMinutes = Math.floor(diffMs / (60 * 1000));
-        if (diffMinutes > shift.gracePeriod) {
-          status = AttendanceStatus.LATE;
-          lateMinutes = diffMinutes;
-        }
-      }
-
-      const attendance = await prisma.attendance.create({
-        data: {
-          employeeId: employeeId!,
-          timetableId: targetTimetableId,
-          latitude,
-          longitude,
-          distance,
-          status,
-          checkIn: now,
-          branchId
-        }
-      });
-      return res.json({
-        type: 'CHECK_IN',
-        message: status === AttendanceStatus.LATE
-          ? `Checked in successfully (LATE by ${lateMinutes} mins)`
-          : 'Checked in successfully (ON TIME)',
-        attendance,
-        distance
-      });
-    }
-
-    if (matchedTimetableForCheckOut) {
-      const activeAtt = await prisma.attendance.findFirst({
-        where: {
-          employeeId,
-          timetableId: matchedTimetableForCheckOut.id,
-          checkIn: { gte: todayStart, lt: todayEnd },
-          checkOut: null
-        }
-      });
-
-      if (activeAtt) {
-        const updated = await prisma.attendance.update({
-          where: { id: activeAtt.id },
-          data: { checkOut: now }
-        });
-        return res.json({
-          type: 'CHECK_OUT',
-          message: `Checked out successfully for ${matchedTimetableForCheckOut.name}`,
-          attendance: updated,
-          distance
-        });
-      }
-    }
-
-    if (matchedTimetableForCheckIn) {
-      const existingAtt = await prisma.attendance.findFirst({
-        where: {
-          employeeId,
-          timetableId: matchedTimetableForCheckIn.id,
-          checkIn: { gte: todayStart, lt: todayEnd }
-        }
-      });
-
-      if (!existingAtt) {
-        const dutyTime = timeStringToDate(matchedTimetableForCheckIn.onDutyTime);
-        const diffMs = now.getTime() - dutyTime.getTime();
-        const diffMinutes = Math.floor(diffMs / (60 * 1000));
-
-        let status: AttendanceStatus = AttendanceStatus.ON_TIME;
-        let lateMinutes = 0;
-        if (diffMinutes > matchedTimetableForCheckIn.lateTime) {
-          status = AttendanceStatus.LATE;
-          lateMinutes = diffMinutes;
-        }
-
-        const attendance = await prisma.attendance.create({
-          data: {
-            employeeId: employeeId!,
-            timetableId: matchedTimetableForCheckIn.id,
-            latitude,
-            longitude,
-            distance,
-            status,
-            checkIn: now,
-            branchId
-          }
-        });
-        return res.json({
-          type: 'CHECK_IN',
-          message: status === AttendanceStatus.LATE 
-            ? `Checked in successfully for ${matchedTimetableForCheckIn.name} (LATE by ${lateMinutes} mins)` 
-            : `Checked in successfully for ${matchedTimetableForCheckIn.name} (ON TIME)`,
-          attendance,
-          distance
-        });
-      }
-    }
-
-    // 5. Fallback behavior (Single check-in/out range or general day tracking)
-    const activeAttendance = await prisma.attendance.findFirst({
-      where: {
-        employeeId,
-        checkIn: { gte: todayStart, lt: todayEnd },
-        checkOut: null
-      },
-      orderBy: { checkIn: 'desc' }
-    });
-
-    if (activeAttendance) {
       const updated = await prisma.attendance.update({
-        where: { id: activeAttendance.id },
+        where: { id: activeAttForOut.id },
         data: { checkOut: now }
       });
       return res.json({
         type: 'CHECK_OUT',
-        message: 'Checked out successfully',
+        message: `Checked out successfully for ${matchedTimetableForCheckOut.name}`,
         attendance: updated,
         distance
       });
-    } else {
+    }
+
+    if (scanType === 'CHECK_IN') {
+      if (!matchedTimetableForCheckIn) {
+        const allowedWindows = timetablesForToday.map(tt => `${tt.name}: ${tt.beginningIn}-${tt.endingIn}`).join(', ');
+        return await logFailure(
+          `មិនស្ថិតក្នុងម៉ោងអនុញ្ញាតឱ្យស្កែនចូលទេ! (ម៉ោងស្កែនចូល៖ ${allowedWindows}) / Outside allowed check-in window! Allowed windows: ${allowedWindows}`
+        );
+      }
+
+      const todayAtts = await getAttendancesForToday();
+      const existingAtt = todayAtts.find(a => a.timetableId === matchedTimetableForCheckIn.id);
+
+      if (existingAtt) {
+        return res.status(400).json({ error: `អ្នកបានស្កែន Check In រួចរាល់ហើយសម្រាប់វេន ${matchedTimetableForCheckIn.name}! / You have already checked in for ${matchedTimetableForCheckIn.name} today!` });
+      }
+
+      const dutyTime = timeStringToDate(matchedTimetableForCheckIn.onDutyTime);
+      const diffMs = now.getTime() - dutyTime.getTime();
+      const diffMinutes = Math.floor(diffMs / (60 * 1000));
+
       let status: AttendanceStatus = AttendanceStatus.ON_TIME;
       let lateMinutes = 0;
-      let targetTimetableId: string | null = null;
-
-      if (timetablesForToday.length > 0) {
-        const alreadyAttendedIds = (await prisma.attendance.findMany({
-          where: {
-            employeeId,
-            checkIn: { gte: todayStart, lt: todayEnd }
-          },
-          select: { timetableId: true }
-        })).map(a => a.timetableId).filter(Boolean);
-
-        const nextTimetable = timetablesForToday.find(t => !alreadyAttendedIds.includes(t.id)) || timetablesForToday[0];
-        targetTimetableId = nextTimetable.id;
-
-        const dutyTime = timeStringToDate(nextTimetable.onDutyTime);
-        const diffMs = now.getTime() - dutyTime.getTime();
-        const diffMinutes = Math.floor(diffMs / (60 * 1000));
-        if (diffMinutes > nextTimetable.lateTime) {
-          status = AttendanceStatus.LATE;
-          lateMinutes = diffMinutes;
-        }
-      } else if (schedules.length > 0) {
-        const shift = schedules[0].shift;
-        const [shiftHour, shiftMin] = shift.startTime.split(':').map(Number);
-        const shiftTime = new Date(now.getTime());
-        shiftTime.setHours(shiftHour, shiftMin, 0, 0);
-
-        const diffMs = now.getTime() - shiftTime.getTime();
-        const diffMinutes = Math.floor(diffMs / (60 * 1000));
-        if (diffMinutes > shift.gracePeriod) {
-          status = AttendanceStatus.LATE;
-          lateMinutes = diffMinutes;
-        }
+      if (diffMinutes > matchedTimetableForCheckIn.lateTime) {
+        status = AttendanceStatus.LATE;
+        lateMinutes = diffMinutes;
       }
 
       const attendance = await prisma.attendance.create({
         data: {
           employeeId: employeeId!,
-          timetableId: targetTimetableId,
+          timetableId: matchedTimetableForCheckIn.id,
           latitude,
           longitude,
           distance,
@@ -1381,12 +1412,14 @@ app.post('/api/attendance/scan', authenticateToken, async (req: AuthenticatedReq
       return res.json({
         type: 'CHECK_IN',
         message: status === AttendanceStatus.LATE 
-          ? `Checked in successfully (LATE by ${lateMinutes} mins)` 
-          : 'Checked in successfully (ON TIME)',
+          ? `Checked in successfully for ${matchedTimetableForCheckIn.name} (LATE by ${lateMinutes} mins)` 
+          : `Checked in successfully for ${matchedTimetableForCheckIn.name} (ON TIME)`,
         attendance,
         distance
       });
     }
+
+    return await logFailure('ប្រភេទស្កែនមិនត្រឹមត្រូវ (Invalid scanType)');
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1437,15 +1470,193 @@ app.post('/api/attendance/reset', authenticateToken, requireAdmin, async (req: R
   }
 });
 
+// POST /api/attendance/manual - Create an attendance record manually
+app.post('/api/attendance/manual', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { employeeId, employeeIds, checkIn, checkOut, status, timetableId, branchId, latitude, longitude, distance } = req.body;
+    if (!checkIn || !status) {
+      return res.status(400).json({ error: 'Missing checkIn or status' });
+    }
+
+    if (employeeIds && Array.isArray(employeeIds)) {
+      if (employeeIds.length === 0) {
+        return res.status(400).json({ error: 'Please select at least one employee' });
+      }
+      const createdRecords = [];
+      for (const empId of employeeIds) {
+        const record = await prisma.attendance.create({
+          data: {
+            employeeId: empId,
+            checkIn: new Date(checkIn),
+            checkOut: checkOut ? new Date(checkOut) : null,
+            status,
+            timetableId: timetableId || null,
+            branchId: branchId || null,
+            latitude: latitude !== undefined ? parseFloat(latitude) : 0.0,
+            longitude: longitude !== undefined ? parseFloat(longitude) : 0.0,
+            distance: distance !== undefined ? parseFloat(distance) : 0.0
+          }
+        });
+        createdRecords.push(record);
+      }
+      return res.status(201).json(createdRecords);
+    }
+
+    if (!employeeId) {
+      return res.status(400).json({ error: 'Missing employeeId' });
+    }
+
+    const record = await prisma.attendance.create({
+      data: {
+        employeeId,
+        checkIn: new Date(checkIn),
+        checkOut: checkOut ? new Date(checkOut) : null,
+        status,
+        timetableId: timetableId || null,
+        branchId: branchId || null,
+        latitude: latitude !== undefined ? parseFloat(latitude) : 0.0,
+        longitude: longitude !== undefined ? parseFloat(longitude) : 0.0,
+        distance: distance !== undefined ? parseFloat(distance) : 0.0
+      },
+      include: {
+        employee: { select: { name: true, email: true, department: { select: { name: true } } } }
+      }
+    });
+    res.status(201).json(record);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/attendance/:id - Update an existing attendance record
+app.put('/api/attendance/:id', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const { checkIn, checkOut, status, timetableId, branchId, latitude, longitude, distance } = req.body;
+    const existing = await prisma.attendance.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Attendance record not found.' });
+    }
+    const record = await prisma.attendance.update({
+      where: { id },
+      data: {
+        checkIn: checkIn ? new Date(checkIn) : existing.checkIn,
+        checkOut: checkOut !== undefined ? (checkOut ? new Date(checkOut) : null) : existing.checkOut,
+        status: status || existing.status,
+        timetableId: timetableId !== undefined ? (timetableId || null) : existing.timetableId,
+        branchId: branchId !== undefined ? (branchId || null) : existing.branchId,
+        latitude: latitude !== undefined ? parseFloat(latitude) : existing.latitude,
+        longitude: longitude !== undefined ? parseFloat(longitude) : existing.longitude,
+        distance: distance !== undefined ? parseFloat(distance) : existing.distance
+      },
+      include: {
+        employee: { select: { name: true, email: true, department: { select: { name: true } } } }
+      }
+    });
+    res.json(record);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/attendance/:id - Delete an attendance record
+app.delete('/api/attendance/:id', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const existing = await prisma.attendance.findUnique({ where: { id } });
+    if (!existing) {
+      return res.status(404).json({ error: 'Attendance record not found.' });
+    }
+    await prisma.attendance.delete({ where: { id } });
+    res.json({ message: 'Attendance record deleted successfully.' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==========================================
 // 8. DASHBOARD & EXCEPTION REPORT ENGINE
 // ==========================================
 
 app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, async (req: Request, res: Response) => {
   try {
-    // 1. Fetch Core Data
+    const kpisOnly = req.query.kpisOnly === 'true';
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+
+    if (kpisOnly) {
+      const totalEmployees = await prisma.employee.count();
+      const presentToday = await prisma.attendance.count({
+        where: {
+          checkIn: {
+            gte: todayStart
+          }
+        }
+      });
+      const activeShifts = await prisma.shift.count();
+      const activeMaintenance = await prisma.maintenance.count({
+        where: { endTime: { gte: new Date() } }
+      });
+      const verificationFailures = await prisma.scanFailure.count();
+
+      return res.json({
+        kpis: {
+          totalEmployees,
+          presentToday,
+          activeShifts,
+          activeMaintenance,
+          verificationFailures
+        },
+        reports: {
+          clockExceptions: [],
+          shiftExceptions: [],
+          miscExceptions: [],
+          calculatedItems: [],
+          otReports: [],
+          noShiftAtts: []
+        }
+      });
+    }
+
+    // Support query filters from & to
+    const fromDateStr = req.query.from as string | undefined;
+    const toDateStr = req.query.to as string | undefined;
+
+    let dateFilterSchedule: any = {};
+    let dateFilterAttendance: any = {};
+    let dateFilterScanFailure: any = {};
+
+    if (fromDateStr || toDateStr) {
+      if (fromDateStr) {
+        const from = new Date(fromDateStr);
+        dateFilterSchedule.gte = from;
+        dateFilterAttendance.gte = from;
+        dateFilterScanFailure.gte = from;
+      }
+      if (toDateStr) {
+        const to = new Date(toDateStr);
+        to.setHours(23, 59, 59, 999);
+        dateFilterSchedule.lte = to;
+        dateFilterAttendance.lte = to;
+        dateFilterScanFailure.lte = to;
+      }
+    } else {
+      // Default to last 60 days
+      const sixtyDaysAgo = new Date();
+      sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
+      sixtyDaysAgo.setHours(0, 0, 0, 0);
+      
+      dateFilterSchedule.gte = sixtyDaysAgo;
+      dateFilterAttendance.gte = sixtyDaysAgo;
+      dateFilterScanFailure.gte = sixtyDaysAgo;
+    }
+
+    // 1. Fetch Core Data with range filters
     const employees = await prisma.employee.findMany({ include: { department: true } });
     const schedules = await prisma.schedule.findMany({
+      where: {
+        date: dateFilterSchedule
+      },
       include: {
         shift: {
           include: {
@@ -1457,12 +1668,19 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
       }
     });
     const attendances = await prisma.attendance.findMany({
+      where: {
+        checkIn: dateFilterAttendance
+      },
       include: {
         employee: { select: { name: true, email: true, department: { select: { name: true } } } },
         timetable: true
       }
     });
-    const scanFailures = await prisma.scanFailure.findMany();
+    const scanFailures = await prisma.scanFailure.findMany({
+      where: {
+        createdAt: dateFilterScanFailure
+      }
+    });
 
     // Auxiliary sets and maps
     const employeeMap = new Map(employees.map(e => [e.id, e]));
@@ -1471,8 +1689,7 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
     // TAB 1: Clock In/Out Log Exceptions
     // - Check-in exists but no check-out, and check-in date is in the past (yesterday or older)
     // ------------------------------------------------------------------
-    const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+
 
     const clockExceptions = attendances
       .filter(att => att.checkOut === null && new Date(att.checkIn) < todayStart)
@@ -1492,31 +1709,67 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
     };
 
     // ------------------------------------------------------------------
+    // Fetch all employee timetables to match decoupled assignments
+    const employeeTimetables = await prisma.employeeTimetable.findMany({
+      include: { timetable: true }
+    });
+
+    // ------------------------------------------------------------------
     // TAB 2: Shift Exception (ABSENT, LATE, or EARLY_LEAVE on scheduled shifts)
     // ------------------------------------------------------------------
     const shiftExceptions: any[] = [];
+    const processedKeys = new Set<string>();
 
     schedules.forEach(sched => {
       const emp = employeeMap.get(sched.employeeId);
       if (!emp) return;
 
-      const schedDate = new Date(sched.date);
-      const schedDateStr = schedDate.toDateString();
+      const schedDateStr = getCambodiaDateString(sched.date);
+      const schedDate = new Date(schedDateStr + 'T00:00:00+07:00');
       const dayOfWeek = schedDate.getDay();
 
-      // Find timetables for this day of week under this shift
-      const dayTimetables = sched.shift.dayTimetables.filter(dt => dt.dayOfWeek === dayOfWeek);
+      // Find timetables for this day of week under this employee
+      const dayTimetables = employeeTimetables.filter(et => et.employeeId === sched.employeeId && et.dayOfWeek === dayOfWeek);
       if (dayTimetables.length === 0) return; // Off day
 
       // Find attendance for this employee on this date
       const attForDay = attendances.filter(att => {
-        const attDate = new Date(att.checkIn);
-        return att.employeeId === sched.employeeId && attDate.toDateString() === schedDateStr;
+        return att.employeeId === sched.employeeId && getCambodiaDateString(att.checkIn) === schedDateStr;
       });
 
       dayTimetables.forEach(dt => {
         const tt = dt.timetable;
-        const att = attForDay.find(a => a.timetableId === tt.id);
+        const key = `${sched.employeeId}_${schedDateStr}_${tt.id}`;
+        if (processedKeys.has(key)) return;
+        processedKeys.add(key);
+
+        let att = attForDay.find(a => a.timetableId === tt.id);
+
+        if (!att) {
+          // Fallback matching: if the attendance log has no timetableId (null), match by checking if it falls in the duty range
+          att = attForDay.find(a => {
+            const alreadyMatched = dayTimetables.some(otherDt => otherDt.timetable.id !== tt.id && a.timetableId === otherDt.timetable.id);
+            if (alreadyMatched) return false;
+
+            const checkInDate = new Date(a.checkIn);
+            const khCheckIn = getCambodiaTime(checkInDate);
+            const checkInMin = khCheckIn.getUTCHours() * 60 + khCheckIn.getUTCMinutes();
+            
+            const startInMin = parseTimeStr(tt.beginningIn);
+            const endInMin = parseTimeStr(tt.endingIn);
+            if (checkInMin >= startInMin && checkInMin <= endInMin) {
+              return true;
+            }
+
+            const dutyMin = parseTimeStr(tt.onDutyTime);
+            const offDutyMin = parseTimeStr(tt.offDutyTime);
+            if (checkInMin >= dutyMin && checkInMin <= offDutyMin) {
+              return true;
+            }
+
+            return false;
+          });
+        }
 
         if (!att) {
           // ABSENT for this timetable (only log if scheduled day/time has passed)
@@ -1527,7 +1780,7 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
               employeeName: emp.name,
               departmentName: emp.department.name,
               date: sched.date,
-              timetable: `${sched.shift.name} (${tt.name})`,
+              timetable: `${tt.name} (${tt.onDutyTime} - ${tt.offDutyTime})`,
               onDuty: tt.onDutyTime,
               offDuty: tt.offDutyTime,
               clockIn: 'N/A',
@@ -1537,7 +1790,7 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
               absent: 'Yes',
               workTime: '-',
               type: 'ABSENT',
-              details: `Scheduled for ${sched.shift.name} - ${tt.name} (${tt.onDutyTime} - ${tt.offDutyTime}) but did not scan.`
+              details: `Scheduled for ${tt.name} (${tt.onDutyTime} - ${tt.offDutyTime}) but did not scan.`
             });
           }
         } else {
@@ -1549,7 +1802,7 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
 
           const rawLateMin = checkInMin - shiftStartMin;
           const lateMin = rawLateMin > tt.lateTime ? rawLateMin : 0;
-          const lateStr = lateMin > 0 ? `${lateMin} mins` : '-';
+          const lateStr = lateMin > 0 ? `${lateMin}m` : '-';
 
           let earlyMin = 0;
           let clockOutStr = 'N/A';
@@ -1558,50 +1811,62 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
             const khCheckOut = getCambodiaTime(checkOutDate);
             const checkOutMin = khCheckOut.getUTCHours() * 60 + khCheckOut.getUTCMinutes();
             const shiftEndMin = parseTimeStr(tt.offDutyTime);
-            earlyMin = Math.max(0, shiftEndMin - checkOutMin);
+            const rawEarlyMin = Math.max(0, shiftEndMin - checkOutMin);
+            earlyMin = rawEarlyMin > tt.leaveEarly ? rawEarlyMin : 0;
             clockOutStr = formatCambodiaTime(checkOutDate);
           }
-          const earlyStr = earlyMin > 0 ? `${earlyMin} mins` : '-';
+          const earlyStr = earlyMin > 0 ? `${earlyMin}m` : '-';
 
           const isLate = lateMin > 0 || att.status === AttendanceStatus.LATE;
           const isEarly = earlyMin > 0;
 
-          if (isLate || isEarly) {
-            let exceptionType = 'LATE';
-            if (isLate && isEarly) exceptionType = 'LATE & EARLY';
-            else if (isEarly) exceptionType = 'EARLY_LEAVE';
+          let exceptionType = 'ON TIME';
+          if (isLate && isEarly) exceptionType = 'LATE & EARLY';
+          else if (isLate) exceptionType = 'LATE';
+          else if (isEarly) exceptionType = 'EARLY_LEAVE';
 
-            let workTimeStr = '-';
-            if (att.checkIn && att.checkOut) {
-              const hours = (new Date(att.checkOut).getTime() - new Date(att.checkIn).getTime()) / (1000 * 60 * 60);
-              workTimeStr = `${hours.toFixed(1)} hrs`;
-            }
-
-            shiftExceptions.push({
-              id: `exception-${att.id}`,
-              employeeIdCode: emp.employeeIdCode || 'N/A',
-              employeeName: emp.name,
-              departmentName: emp.department.name,
-              date: att.checkIn,
-              timetable: `${sched.shift.name} (${tt.name})`,
-              onDuty: tt.onDutyTime,
-              offDuty: tt.offDutyTime,
-              clockIn: formatCambodiaTime(checkInDate),
-              clockOut: clockOutStr,
-              late: lateStr,
-              early: earlyStr,
-              absent: 'No',
-              workTime: workTimeStr,
-              type: exceptionType,
-              details: isLate && isEarly 
-                ? `Late by ${lateMin}m and left early by ${earlyMin}m.` 
-                : isLate 
-                  ? `Arrived late at ${formatCambodiaTime(checkInDate)}.`
-                  : `Left early at ${formatCambodiaTime(att.checkOut!)} (Shift end: ${tt.offDutyTime}).`
-            });
+          let workTimeStr = '-';
+          if (att.checkIn && att.checkOut) {
+            const hours = (new Date(att.checkOut).getTime() - new Date(att.checkIn).getTime()) / (1000 * 60 * 60);
+            workTimeStr = `${hours.toFixed(1)} hrs`;
           }
+
+          shiftExceptions.push({
+            id: `exception-${att.id}`,
+            employeeIdCode: emp.employeeIdCode || 'N/A',
+            employeeName: emp.name,
+            departmentName: emp.department.name,
+            date: att.checkIn,
+            timetable: `${tt.name} (${tt.onDutyTime} - ${tt.offDutyTime})`,
+            onDuty: tt.onDutyTime,
+            offDuty: tt.offDutyTime,
+            clockIn: formatCambodiaTime(checkInDate),
+            clockOut: clockOutStr,
+            late: lateStr,
+            early: earlyStr,
+            absent: 'No',
+            workTime: workTimeStr,
+            type: exceptionType,
+            details: exceptionType === 'ON TIME'
+              ? 'Checked in on time.'
+              : isLate && isEarly
+                ? `Late by ${lateMin}m and left early by ${earlyMin}m.`
+                : isLate
+                  ? `Arrived late by ${lateMin}m.`
+                  : `Left early by ${earlyMin}m.`
+          });
         }
       });
+    });
+
+    // Sort shiftExceptions by Date ascending, and by start time ascending for same date
+    shiftExceptions.sort((a, b) => {
+      const timeA = new Date(a.date).getTime();
+      const timeB = new Date(b.date).getTime();
+      if (timeA !== timeB) {
+        return timeA - timeB;
+      }
+      return (a.onDuty || '').localeCompare(b.onDuty || '');
     });
 
     // ------------------------------------------------------------------
@@ -1646,12 +1911,41 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
         }
       });
 
-      // Count absent (schedules in the past with no attendance)
+      // Count absent per scheduled timetable block (using Cambodia timezone)
+      const processedCalKeys = new Set<string>();
       empScheds.forEach(sched => {
-        const schedDate = new Date(sched.date);
+        const schedDateStr = getCambodiaDateString(sched.date);
+        const schedDate = new Date(schedDateStr + 'T00:00:00+07:00');
         if (schedDate < todayStart) {
-          const attended = empAtts.some(att => new Date(att.checkIn).toDateString() === schedDate.toDateString());
-          if (!attended) absentCount++;
+          const dayOfWeek = schedDate.getDay();
+          const dayTimetables = employeeTimetables.filter(et => et.employeeId === emp.id && et.dayOfWeek === dayOfWeek);
+          dayTimetables.forEach(dt => {
+            const calKey = `${schedDateStr}_${dt.timetable.id}`;
+            if (processedCalKeys.has(calKey)) return;
+            processedCalKeys.add(calKey);
+
+            const attended = empAtts.some(att => {
+              const matchesTimetable = att.timetableId === dt.timetable.id;
+              const matchesDay = getCambodiaDateString(att.checkIn) === schedDateStr;
+              if (matchesTimetable && matchesDay) return true;
+
+              // Fallback match for legacy/null timetable check-in
+              if (!att.timetableId && matchesDay) {
+                const checkInDate = new Date(att.checkIn);
+                const khCheckIn = getCambodiaTime(checkInDate);
+                const checkInMin = khCheckIn.getUTCHours() * 60 + khCheckIn.getUTCMinutes();
+                const startInMin = parseTimeStr(dt.timetable.beginningIn);
+                const endInMin = parseTimeStr(dt.timetable.endingIn);
+                const dutyMin = parseTimeStr(dt.timetable.onDutyTime);
+                const offDutyMin = parseTimeStr(dt.timetable.offDutyTime);
+                if ((checkInMin >= startInMin && checkInMin <= endInMin) || (checkInMin >= dutyMin && checkInMin <= offDutyMin)) {
+                  return true;
+                }
+              }
+              return false;
+            });
+            if (!attended) absentCount++;
+          });
         }
       });
 
@@ -1676,8 +1970,8 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
     attendances.forEach(att => {
       if (att.checkIn && att.checkOut) {
         // Match with shift to calculate actual shift end difference
-        const attDateStr = new Date(att.checkIn).toDateString();
-        const sched = schedules.find(s => s.employeeId === att.employeeId && new Date(s.date).toDateString() === attDateStr);
+        const attDateStr = getCambodiaDateString(att.checkIn);
+        const sched = schedules.find(s => s.employeeId === att.employeeId && getCambodiaDateString(s.date) === attDateStr);
 
         let otHours = 0;
         let shiftEndStr = 'N/A';
@@ -1686,15 +1980,15 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
           const shift = sched.shift;
           shiftEndStr = shift.endTime;
           const [endHour, endMin] = shift.endTime.split(':').map(Number);
-          const shiftEndTime = new Date(att.checkIn);
-          shiftEndTime.setHours(endHour, endMin, 0, 0);
+          const dateStr = `${attDateStr}T${endHour.toString().padStart(2, '0')}:${endMin.toString().padStart(2, '0')}:00+07:00`;
+          const shiftEndTimeKh = new Date(dateStr);
 
-          const diffMs = new Date(att.checkOut).getTime() - shiftEndTime.getTime();
+          const diffMs = new Date(att.checkOut).getTime() - shiftEndTimeKh.getTime();
           if (diffMs > 0) {
             otHours = diffMs / (1000 * 60 * 60);
           }
         } else {
-          // No shift scheduled, calculate everything after 8 hours as OT, or if worked > 0, count work hours - 8
+          // No shift scheduled, calculate everything after 8 hours as OT
           const hours = (new Date(att.checkOut).getTime() - new Date(att.checkIn).getTime()) / (1000 * 60 * 60);
           if (hours > 8) {
             otHours = hours - 8;
@@ -1723,8 +2017,8 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
     // ------------------------------------------------------------------
     const noShiftAtts = attendances
       .filter(att => {
-        const attDateStr = new Date(att.checkIn).toDateString();
-        const hasShift = schedules.some(s => s.employeeId === att.employeeId && new Date(s.date).toDateString() === attDateStr);
+        const attDateStr = getCambodiaDateString(att.checkIn);
+        const hasShift = schedules.some(s => s.employeeId === att.employeeId && getCambodiaDateString(s.date) === attDateStr);
         return !hasShift;
       })
       .map(att => ({
@@ -1737,11 +2031,16 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
         distance: Math.round(att.distance)
       }));
 
+    // Sort helper arrays by date ascending
+    clockExceptions.sort((a, b) => new Date(a.checkIn).getTime() - new Date(b.checkIn).getTime());
+    otReports.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    noShiftAtts.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
     // ------------------------------------------------------------------
     // KPI METRICS
     // ------------------------------------------------------------------
     const totalEmployees = employees.length;
-    const presentToday = attendances.filter(att => new Date(att.checkIn).toDateString() === todayStart.toDateString()).length;
+    const presentToday = attendances.filter(att => getCambodiaDateString(att.checkIn) === getCambodiaDateString(todayStart)).length;
     const activeShifts = await prisma.shift.count();
     const activeMaintenance = await prisma.maintenance.count({
       where: { endTime: { gte: new Date() } }
@@ -1769,7 +2068,362 @@ app.get('/api/attendance/dashboard-reports', authenticateToken, requireAdmin, as
   }
 });
 
+// GET /api/admin/backup - Export DB JSON backup
+app.get('/api/admin/backup', authenticateToken, requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const departments = await prisma.department.findMany();
+    const employees = await prisma.employee.findMany();
+    const timetables = await prisma.timetable.findMany();
+    const shifts = await prisma.shift.findMany();
+    const shiftDayTimetables = await prisma.shiftDayTimetable.findMany();
+    const employeeTimetables = await prisma.employeeTimetable.findMany();
+    const schedules = await prisma.schedule.findMany();
+    const attendances = await prisma.attendance.findMany();
+    const branches = await prisma.branch.findMany();
+    const maintenances = await prisma.maintenance.findMany();
+    const systemSettings = await prisma.systemSetting.findMany();
+    const scanFailures = await prisma.scanFailure.findMany();
+
+    const backupData = {
+      version: "1.0",
+      exportedAt: new Date().toISOString(),
+      data: {
+        departments,
+        employees,
+        timetables,
+        shifts,
+        shiftDayTimetables,
+        employeeTimetables,
+        schedules,
+        attendances,
+        branches,
+        maintenances,
+        systemSettings,
+        scanFailures
+      }
+    };
+
+    // Also save a copy on the server so it appears in the backups list
+    const BACKUP_DIR = path.join(process.cwd(), 'backups');
+    if (!fs.existsSync(BACKUP_DIR)) {
+      fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    }
+    const now = new Date();
+    const dateStr = now.getFullYear() + '-' + 
+      String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+      String(now.getDate()).padStart(2, '0') + '_' + 
+      String(now.getHours()).padStart(2, '0') + '-' + 
+      String(now.getMinutes()).padStart(2, '0') + '-' + 
+      String(now.getSeconds()).padStart(2, '0');
+    const filename = `ams_manual_backup_${dateStr}.json`;
+    const filepath = path.join(BACKUP_DIR, filename);
+    fs.writeFileSync(filepath, JSON.stringify(backupData, null, 2), 'utf-8');
+
+    res.setHeader('Content-disposition', `attachment; filename=ams_backup_${new Date().toISOString().slice(0,10)}.json`);
+    res.setHeader('Content-type', 'application/json');
+    res.write(JSON.stringify(backupData, null, 2));
+    res.end();
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to generate backup: ' + err.message });
+  }
+});
+
+// POST /api/admin/restore - Restore DB from JSON backup
+app.post('/api/admin/restore', authenticateToken, requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const { version, data } = req.body;
+    if (!version || !data) {
+      return res.status(400).json({ error: 'Invalid backup file format.' });
+    }
+
+    // Wrap in a transaction to prevent partial restore on failure
+    await prisma.$transaction(async (tx) => {
+      // 1. Clear all existing tables
+      await tx.attendance.deleteMany({});
+      await tx.scanFailure.deleteMany({});
+      await tx.schedule.deleteMany({});
+      await tx.employeeMovement.deleteMany({});
+      await tx.employeeTimetable.deleteMany({});
+      await tx.employee.deleteMany({});
+      await tx.department.deleteMany({});
+      await tx.shiftDayTimetable.deleteMany({});
+      await tx.timetable.deleteMany({});
+      await tx.shift.deleteMany({});
+      await tx.maintenance.deleteMany({});
+      await tx.systemSetting.deleteMany({});
+      await tx.branch.deleteMany({});
+
+      // 2. Restore tables in dependency order
+      // Departments
+      if (data.departments?.length) {
+        await tx.department.createMany({ data: data.departments });
+      }
+      // Branches
+      if (data.branches?.length) {
+        await tx.branch.createMany({ data: data.branches });
+      }
+      // Timetables
+      if (data.timetables?.length) {
+        await tx.timetable.createMany({ data: data.timetables });
+      }
+      // Shifts
+      if (data.shifts?.length) {
+        await tx.shift.createMany({ data: data.shifts });
+      }
+      // Shift Day Timetables
+      if (data.shiftDayTimetables?.length) {
+        await tx.shiftDayTimetable.createMany({ data: data.shiftDayTimetables });
+      }
+      // Employees
+      if (data.employees?.length) {
+        await tx.employee.createMany({ data: data.employees });
+      }
+      // Employee Timetables
+      if (data.employeeTimetables?.length) {
+        await tx.employeeTimetable.createMany({ data: data.employeeTimetables });
+      }
+      // Schedules
+      if (data.schedules?.length) {
+        const mappedSchedules = data.schedules.map((s: any) => ({
+          ...s,
+          date: new Date(s.date)
+        }));
+        await tx.schedule.createMany({ data: mappedSchedules });
+      }
+      // Attendances
+      if (data.attendances?.length) {
+        const mappedAttendances = data.attendances.map((a: any) => ({
+          ...a,
+          checkIn: new Date(a.checkIn),
+          checkOut: a.checkOut ? new Date(a.checkOut) : null
+        }));
+        await tx.attendance.createMany({ data: mappedAttendances });
+      }
+      // Maintenances
+      if (data.maintenances?.length) {
+        const mappedMaintenances = data.maintenances.map((m: any) => ({
+          ...m,
+          startTime: new Date(m.startTime),
+          endTime: new Date(m.endTime)
+        }));
+        await tx.maintenance.createMany({ data: mappedMaintenances });
+      }
+      // System Settings
+      if (data.systemSettings?.length) {
+        await tx.systemSetting.createMany({ data: data.systemSettings });
+      }
+      // Scan Failures
+      if (data.scanFailures?.length) {
+        const mappedScanFailures = data.scanFailures.map((sf: any) => ({
+          ...sf,
+          createdAt: new Date(sf.createdAt)
+        }));
+        await tx.scanFailure.createMany({ data: mappedScanFailures });
+      }
+    });
+
+    res.json({ message: 'Database restored successfully!' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to restore backup: ' + err.message });
+  }
+});
+
+// ==========================================
+// AUTO BACKUP SCHEDULER & MANAGEMENT ROUTES
+// ==========================================
+
+const BACKUP_DIR = path.join(process.cwd(), 'backups');
+if (!fs.existsSync(BACKUP_DIR)) {
+  fs.mkdirSync(BACKUP_DIR, { recursive: true });
+}
+
+// Function to generate the auto backup
+async function runAutoBackup() {
+  try {
+    const departments = await prisma.department.findMany();
+    const employees = await prisma.employee.findMany();
+    const timetables = await prisma.timetable.findMany();
+    const shifts = await prisma.shift.findMany();
+    const shiftDayTimetables = await prisma.shiftDayTimetable.findMany();
+    const employeeTimetables = await prisma.employeeTimetable.findMany();
+    const schedules = await prisma.schedule.findMany();
+    const attendances = await prisma.attendance.findMany();
+    const branches = await prisma.branch.findMany();
+    const maintenances = await prisma.maintenance.findMany();
+    const systemSettings = await prisma.systemSetting.findMany();
+    const scanFailures = await prisma.scanFailure.findMany();
+
+    const backupData = {
+      version: "1.0",
+      exportedAt: new Date().toISOString(),
+      data: {
+        departments,
+        employees,
+        timetables,
+        shifts,
+        shiftDayTimetables,
+        employeeTimetables,
+        schedules,
+        attendances,
+        branches,
+        maintenances,
+        systemSettings,
+        scanFailures
+      }
+    };
+
+    const now = new Date();
+    // Format: YYYY-MM-DD_HH-MM-SS
+    const dateStr = now.getFullYear() + '-' + 
+      String(now.getMonth() + 1).padStart(2, '0') + '-' + 
+      String(now.getDate()).padStart(2, '0') + '_' + 
+      String(now.getHours()).padStart(2, '0') + '-' + 
+      String(now.getMinutes()).padStart(2, '0') + '-' + 
+      String(now.getSeconds()).padStart(2, '0');
+
+    const filename = `ams_auto_backup_${dateStr}.json`;
+    const filepath = path.join(BACKUP_DIR, filename);
+    fs.writeFileSync(filepath, JSON.stringify(backupData, null, 2), 'utf-8');
+    console.log(`[Auto Backup] Successfully saved auto-backup file: ${filename}`);
+  } catch (err: any) {
+    console.error(`[Auto Backup Error] Failed: ${err.message}`);
+  }
+}
+
+// Schedule Cron Job: run every day at 18:00 (6:00 PM)
+// Pattern: '0 18 * * *'
+cron.schedule('0 18 * * *', () => {
+  console.log('[Scheduler] Triggering auto backup at 18:00...');
+  runAutoBackup();
+});
+
+// GET /api/admin/backups/list - List all auto backups stored on server
+app.get('/api/admin/backups/list', authenticateToken, requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    if (!fs.existsSync(BACKUP_DIR)) {
+      return res.json([]);
+    }
+    const files = fs.readdirSync(BACKUP_DIR);
+    const backupFiles = files
+      .filter(f => f.endsWith('.json'))
+      .map(f => {
+        const filepath = path.join(BACKUP_DIR, f);
+        const stats = fs.statSync(filepath);
+        return {
+          filename: f,
+          size: stats.size,
+          createdAt: stats.mtime.toISOString()
+        };
+      })
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()); // newest first
+
+    res.json(backupFiles);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to list backups: ' + err.message });
+  }
+});
+
+// GET /api/admin/backups/download/:filename - Download a specific backup file from server
+app.get('/api/admin/backups/download/:filename', authenticateToken, requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const filename = req.params.filename;
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ error: 'Invalid file name.' });
+    }
+    const filepath = path.join(BACKUP_DIR, filename);
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).json({ error: 'File not found.' });
+    }
+    res.download(filepath);
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to download backup: ' + err.message });
+  }
+});
+
+// POST /api/admin/backups/restore/:filename - Restore database from a specific auto backup file
+app.post('/api/admin/backups/restore/:filename', authenticateToken, requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const filename = req.params.filename;
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ error: 'Invalid file name.' });
+    }
+    const filepath = path.join(BACKUP_DIR, filename);
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).json({ error: 'File not found.' });
+    }
+
+    const fileContent = fs.readFileSync(filepath, 'utf-8');
+    const { version, data } = JSON.parse(fileContent);
+    if (!version || !data) {
+      return res.status(400).json({ error: 'Invalid backup file format.' });
+    }
+
+    // Wrap in a transaction to prevent partial restore on failure
+    await prisma.$transaction(async (tx) => {
+      // 1. Clear all existing tables
+      await tx.attendance.deleteMany({});
+      await tx.scanFailure.deleteMany({});
+      await tx.schedule.deleteMany({});
+      await tx.employeeMovement.deleteMany({});
+      await tx.employeeTimetable.deleteMany({});
+      await tx.employee.deleteMany({});
+      await tx.department.deleteMany({});
+      await tx.shiftDayTimetable.deleteMany({});
+      await tx.timetable.deleteMany({});
+      await tx.shift.deleteMany({});
+      await tx.maintenance.deleteMany({});
+      await tx.systemSetting.deleteMany({});
+      await tx.branch.deleteMany({});
+
+      // 2. Restore tables in dependency order
+      if (data.departments?.length) await tx.department.createMany({ data: data.departments });
+      if (data.branches?.length) await tx.branch.createMany({ data: data.branches });
+      if (data.timetables?.length) await tx.timetable.createMany({ data: data.timetables });
+      if (data.shifts?.length) await tx.shift.createMany({ data: data.shifts });
+      if (data.shiftDayTimetables?.length) await tx.shiftDayTimetable.createMany({ data: data.shiftDayTimetables });
+      if (data.employees?.length) await tx.employee.createMany({ data: data.employees });
+      if (data.employeeTimetables?.length) await tx.employeeTimetable.createMany({ data: data.employeeTimetables });
+      if (data.schedules?.length) {
+        await tx.schedule.createMany({ data: data.schedules.map((s: any) => ({ ...s, date: new Date(s.date) })) });
+      }
+      if (data.attendances?.length) {
+        await tx.attendance.createMany({ data: data.attendances.map((a: any) => ({ ...a, checkIn: new Date(a.checkIn), checkOut: a.checkOut ? new Date(a.checkOut) : null })) });
+      }
+      if (data.maintenances?.length) {
+        await tx.maintenance.createMany({ data: data.maintenances.map((m: any) => ({ ...m, startTime: new Date(m.startTime), endTime: new Date(m.endTime) })) });
+      }
+      if (data.systemSettings?.length) await tx.systemSetting.createMany({ data: data.systemSettings });
+      if (data.scanFailures?.length) {
+        await tx.scanFailure.createMany({ data: data.scanFailures.map((sf: any) => ({ ...sf, createdAt: new Date(sf.createdAt) })) });
+      }
+    });
+
+    res.json({ message: 'Database restored successfully!' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to restore: ' + err.message });
+  }
+});
+
+// DELETE /api/admin/backups/delete/:filename - Delete a specific backup file
+app.delete('/api/admin/backups/delete/:filename', authenticateToken, requireSuperAdmin, async (req: Request, res: Response) => {
+  try {
+    const filename = req.params.filename;
+    if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
+      return res.status(400).json({ error: 'Invalid file name.' });
+    }
+    const filepath = path.join(BACKUP_DIR, filename);
+    if (!fs.existsSync(filepath)) {
+      return res.status(404).json({ error: 'File not found.' });
+    }
+    fs.unlinkSync(filepath);
+    res.json({ message: 'Backup file deleted successfully.' });
+  } catch (err: any) {
+    res.status(500).json({ error: 'Failed to delete backup: ' + err.message });
+  }
+});
+
 // Serve and listen
-app.listen(port, '0.0.0.0', () => {
+app.listen(port, '0.0.0.0', async () => {
   console.log(`Backend service listening at http://0.0.0.0:${port}`);
+  await normalizeExistingTimetables();
 });

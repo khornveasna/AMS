@@ -48,6 +48,7 @@ model Employee {
   schedules        Schedule[]
   attendances      Attendance[]
   movements        EmployeeMovement[]
+  timetables       EmployeeTimetable[]
   createdAt        DateTime           @default(now())
 }
 
@@ -81,6 +82,17 @@ model ShiftDayTimetable {
   timetable   Timetable @relation(fields: [timetableId], references: [id], onDelete: Cascade)
 }
 
+model EmployeeTimetable {
+  id          String    @id @default(uuid())
+  employeeId  String
+  dayOfWeek   Int       // 0 = Sunday, 1 = Monday ... 6 = Saturday
+  timetableId String
+  employee    Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  timetable   Timetable @relation(fields: [timetableId], references: [id], onDelete: Cascade)
+
+  @@unique([employeeId, dayOfWeek, timetableId])
+}
+
 model Timetable {
   id            String              @id @default(uuid())
   name          String
@@ -98,6 +110,7 @@ model Timetable {
   mustOut       Boolean             @default(true)
   shifts        ShiftDayTimetable[]
   attendances   Attendance[]
+  employeeTimetables EmployeeTimetable[]
 }
 
 model Schedule {

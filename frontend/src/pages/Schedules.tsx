@@ -10,9 +10,11 @@ import {
   Users, 
   Loader2, 
   ShieldAlert, 
-  Check, 
   X, 
-  Palette
+  Palette,
+  Plus,
+  Minus,
+  Check
 } from 'lucide-react';
 
 interface Timetable {
@@ -56,6 +58,7 @@ interface Employee {
   jobTitle: string | null;
   departmentId: string;
   department: { name: string };
+  timetables?: any[];
 }
 
 interface Schedule {
@@ -132,7 +135,6 @@ export default function Schedules() {
 
   // Schedule Assignment State
   const [selectedDeptId, setSelectedDeptId] = useState<string>('all');
-  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
   const [schedShiftId, setSchedShiftId] = useState('');
   const [schedStartDate, setSchedStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [schedEndDate, setSchedEndDate] = useState(new Date().toISOString().split('T')[0]);
@@ -152,6 +154,42 @@ export default function Schedules() {
   // Pagination State
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+
+  // Split View Schedule tab states
+  const [activeEmployeeId, setActiveEmployeeId] = useState<string | null>(null);
+  const [selectedEmployeeIds, setSelectedEmployeeIds] = useState<string[]>([]);
+  const [selectedGroupedScheduleId, setSelectedGroupedScheduleId] = useState<string | null>(null);
+  const [selectedTimetableId, setSelectedTimetableId] = useState<string | null>(null);
+  const [employeeTimetables, setEmployeeTimetables] = useState<any[]>([]);
+
+  const fetchEmployeeTimetables = async (empId: string) => {
+    try {
+      const res = await api.get(`/employees/${empId}/timetables`);
+      setEmployeeTimetables(res.data);
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to fetch employee timetables');
+    }
+  };
+
+  useEffect(() => {
+    if (activeEmployeeId) {
+      fetchEmployeeTimetables(activeEmployeeId);
+    } else {
+      setEmployeeTimetables([]);
+    }
+  }, [activeEmployeeId]);
+
+  // Modals for schedule tab
+  const [isAddShiftModalOpen, setIsAddShiftModalOpen] = useState(false);
+  const [isAddTimetableModalOpen, setIsAddTimetableModalOpen] = useState(false);
+  const [addTtId, setAddTtId] = useState('');
+  const [addTtDays, setAddTtDays] = useState<number[]>([1, 2, 3, 4, 5]); // Default Mon-Fri
+  // Edit schedule range states
+  const [isEditRangeModalOpen, setIsEditRangeModalOpen] = useState(false);
+  const [editRangeGroup, setEditRangeGroup] = useState<any | null>(null);
+  const [editRangeShiftId, setEditRangeShiftId] = useState('');
+  const [editRangeStartDate, setEditRangeStartDate] = useState('');
+  const [editRangeEndDate, setEditRangeEndDate] = useState('');
 
   // Reset page when filter inputs change
   useEffect(() => {
@@ -393,47 +431,7 @@ export default function Schedules() {
   };
 
   // Schedule Assignment Operations
-  const handleAssignSchedules = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (selectedEmployeeIds.length === 0 || !schedShiftId) {
-      setError('Please select at least one employee and a shift');
-      return;
-    }
 
-    try {
-      setLoading(true);
-      setError('');
-
-      // Assign for each selected employee
-      await Promise.all(
-        selectedEmployeeIds.map((empId) =>
-          api.post('/schedules', {
-            employeeId: empId,
-            shiftId: schedShiftId,
-            startDate: schedStartDate,
-            endDate: schedEndDate
-          })
-        )
-      );
-
-      // Auto-update calendar preview to show the scheduled employee
-      if (selectedEmployeeIds.length > 0) {
-        setPreviewEmployeeId(selectedEmployeeIds[0]);
-        const startD = new Date(schedStartDate);
-        if (!isNaN(startD.getTime())) {
-          setPreviewYear(startD.getFullYear());
-          setPreviewMonth(startD.getMonth());
-        }
-      }
-
-      setSelectedEmployeeIds([]);
-      fetchData();
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Failed to assign schedules');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleDeleteSchedule = async (id: string) => {
     if (!confirm('Delete this calendar schedule entry?')) return;
@@ -521,23 +519,158 @@ export default function Schedules() {
     }
   };
 
-  const filteredEmployees = selectedDeptId === 'all'
-    ? employees
-    : employees.filter(e => e.departmentId === selectedDeptId);
+  const handleAddTimetableToEmployee = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeEmployeeId || !addTtId || addTtDays.length === 0) return;
 
-  const toggleSelectEmployee = (id: string) => {
-    setSelectedEmployeeIds(prev => 
-      prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
-    );
-  };
-
-  const toggleSelectAllEmployees = () => {
-    if (selectedEmployeeIds.length === filteredEmployees.length) {
-      setSelectedEmployeeIds([]);
-    } else {
-      setSelectedEmployeeIds(filteredEmployees.map(e => e.id));
+    try {
+      setLoading(true);
+      await api.post(`/employees/${activeEmployeeId}/timetables`, {
+        timetableId: addTtId,
+        daysOfWeek: addTtDays
+      });
+      setIsAddTimetableModalOpen(false);
+      setAddTtId('');
+      setAddTtDays([1, 2, 3, 4, 5]);
+      fetchEmployeeTimetables(activeEmployeeId);
+      fetchData();
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to add timetable to employee');
+    } finally {
+      setLoading(false);
     }
   };
+
+  const handleRemoveTimetableFromEmployee = async () => {
+    if (!activeEmployeeId || !selectedTimetableId) return;
+
+    const selectedTt = timetables.find(t => t.id === selectedTimetableId);
+    if (!selectedTt) return;
+
+    if (!confirm(`តើអ្នកពិតជាចង់លុបពេលវេលា ${selectedTt.name} នេះចេញពីបុគ្គលិកមែនទេ? / Are you sure you want to remove timetable ${selectedTt.name} from employee?`)) return;
+
+    try {
+      setLoading(true);
+      await api.delete(`/employees/${activeEmployeeId}/timetables/${selectedTimetableId}`);
+      setSelectedTimetableId(null);
+      fetchEmployeeTimetables(activeEmployeeId);
+      fetchData();
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to remove timetable from employee');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleOpenEditRangeModal = (group: any) => {
+    setEditRangeGroup(group);
+    setEditRangeShiftId(group.shiftId);
+    setEditRangeStartDate(group.startDate);
+    setEditRangeEndDate(group.endDate);
+    setIsEditRangeModalOpen(true);
+  };
+
+  const handleSaveEditRange = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editRangeGroup || !editRangeShiftId || !editRangeStartDate || !editRangeEndDate) return;
+
+    try {
+      setLoading(true);
+      setError('');
+
+      // Find matching schedules for all selected employees in the OLD range
+      const oldMatched = schedules.filter(s => 
+        selectedEmployeeIds.includes(s.employeeId) && 
+        s.shiftId === editRangeGroup.shiftId &&
+        new Date(s.date).toISOString().split('T')[0] >= editRangeGroup.startDate &&
+        new Date(s.date).toISOString().split('T')[0] <= editRangeGroup.endDate
+      );
+      const idsToDelete = oldMatched.map(s => s.id);
+
+      // 1. Delete old schedules
+      await api.post('/schedules/bulk-delete', { ids: idsToDelete.length > 0 ? idsToDelete : editRangeGroup.ids });
+
+      // 2. Create new schedules in the new range
+      await Promise.all(selectedEmployeeIds.map(empId =>
+        api.post('/schedules', {
+          employeeId: empId,
+          shiftId: editRangeShiftId,
+          startDate: editRangeStartDate,
+          endDate: editRangeEndDate
+        })
+      ));
+
+      setIsEditRangeModalOpen(false);
+      setEditRangeGroup(null);
+      setSelectedGroupedScheduleId(null);
+      fetchData();
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Failed to edit shift schedule assignment');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const filteredEmployees = employees.filter(e => {
+    return selectedDeptId === 'all' || e.departmentId === selectedDeptId;
+  });
+
+
+
+  const getGroupedSchedulesForEmployee = (empId: string) => {
+    const empScheds = schedules.filter(s => s.employeeId === empId);
+
+    // Group by shiftId first to avoid interleaving fragmentation when an employee has multiple overlapping shifts
+    const schedulesByShift: Record<string, Schedule[]> = {};
+    empScheds.forEach(s => {
+      if (!schedulesByShift[s.shiftId]) {
+        schedulesByShift[s.shiftId] = [];
+      }
+      schedulesByShift[s.shiftId].push(s);
+    });
+
+    const groups: { id: string; shiftId: string; shiftName: string; startDate: string; endDate: string; ids: string[] }[] = [];
+
+    Object.keys(schedulesByShift).forEach(shiftId => {
+      const sorted = schedulesByShift[shiftId].sort(
+        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+      );
+
+      const shiftGroups: { id: string; shiftId: string; shiftName: string; startDate: string; endDate: string; ids: string[] }[] = [];
+
+      sorted.forEach(s => {
+        const dateStr = new Date(s.date).toISOString().split('T')[0];
+        const lastGroup = shiftGroups[shiftGroups.length - 1];
+
+        if (lastGroup) {
+          const lastEndDate = new Date(lastGroup.endDate);
+          const currentDate = new Date(dateStr);
+          const diffDays = (currentDate.getTime() - lastEndDate.getTime()) / (1000 * 60 * 60 * 24);
+
+          if (diffDays <= 1) {
+            lastGroup.endDate = dateStr;
+            lastGroup.ids.push(s.id);
+            return;
+          }
+        }
+
+        shiftGroups.push({
+          id: s.id,
+          shiftId: s.shiftId,
+          shiftName: s.shift.name,
+          startDate: dateStr,
+          endDate: dateStr,
+          ids: [s.id]
+        });
+      });
+
+      groups.push(...shiftGroups);
+    });
+
+    return groups.sort((a, b) => new Date(a.startDate).getTime() - new Date(b.startDate).getTime());
+  };
+
+
 
   // Build schedule calendar list for selected employee
   const getEmployeeCalendarData = () => {
@@ -1066,174 +1199,373 @@ export default function Schedules() {
 
           {/* TAB 3: Schedule Employee */}
           {activeTab === 'schedule' && (
-            <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
-              {/* Department Explorer Sidebar */}
-              <div className="xl:col-span-1 border border-slate-200 bg-white rounded-2xl p-5 shadow-sm h-fit">
-                <h4 className="font-extrabold text-slate-800 text-xs uppercase tracking-wider border-b border-slate-100 pb-2 flex items-center gap-1.5">
-                  <Building2 size={14} className="text-slate-500" />
-                  <span>Departments</span>
-                </h4>
-                <div className="flex flex-col gap-1 mt-3">
-                  <button
-                    onClick={() => { setSelectedDeptId('all'); setSelectedEmployeeIds([]); setPreviewEmployeeId('all'); }}
-                    className={`text-left text-xs font-bold p-2 rounded-xl transition-all cursor-pointer ${
-                      selectedDeptId === 'all' 
-                        ? 'bg-blue-50 text-blue-600' 
-                        : 'text-slate-600 hover:bg-slate-50'
-                    }`}
-                  >
-                    All Departments
-                  </button>
-                  {departments.map((dept) => (
-                    <button
-                      key={dept.id}
-                      onClick={() => { setSelectedDeptId(dept.id); setSelectedEmployeeIds([]); setPreviewEmployeeId('all'); }}
-                      className={`text-left text-xs font-bold p-2 rounded-xl transition-all cursor-pointer truncate ${
-                        selectedDeptId === dept.id 
-                          ? 'bg-blue-50 text-blue-600' 
-                          : 'text-slate-600 hover:bg-slate-50'
-                      }`}
-                    >
-                      {dept.name}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Employee Selection List */}
-              <div className="xl:col-span-2 border border-slate-200 bg-white rounded-2xl p-6 shadow-sm">
-                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-                  <h3 className="font-extrabold text-slate-800 text-base flex items-center gap-2">
-                    <Users size={18} className="text-indigo-500" />
-                    <span>ជ្រើសរើសបុគ្គលិក / Employee Selection</span>
-                  </h3>
-                  <span className="text-xs font-bold text-slate-500">
-                    {selectedEmployeeIds.length} / {filteredEmployees.length} selected
-                  </span>
-                </div>
-
-                <div className="overflow-x-auto mt-4 max-h-[450px] overflow-y-auto">
-                  <table className="min-w-full text-left border-collapse">
-                    <thead>
-                      <tr className="border-b border-slate-100">
-                        <th className="py-2.5 px-3 bg-slate-50 w-8">
-                          <input
-                            type="checkbox"
-                            className="w-4 h-4 text-blue-600 border-slate-300 rounded cursor-pointer"
-                            checked={filteredEmployees.length > 0 && selectedEmployeeIds.length === filteredEmployees.length}
-                            onChange={toggleSelectAllEmployees}
-                          />
-                        </th>
-                        <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-xs">ID / Name</th>
-                        <th className="py-2.5 px-3 bg-slate-50 text-slate-500 font-bold text-xs">Title</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {filteredEmployees.map((emp) => {
-                        const hasShiftArranged = schedules.some(s => {
-                          if (s.employeeId !== emp.id) return false;
-                          const sDateStr = new Date(s.date).toISOString().split('T')[0];
-                          return sDateStr >= schedStartDate && sDateStr <= schedEndDate;
-                        });
-
-                        return (
-                          <tr 
-                            key={emp.id} 
-                            onClick={() => toggleSelectEmployee(emp.id)}
-                            className={`border-b border-slate-100 hover:bg-slate-50/50 transition-colors cursor-pointer ${
-                              selectedEmployeeIds.includes(emp.id) ? 'bg-blue-50/10' : ''
-                            }`}
-                          >
-                            <td className="py-2.5 px-3">
-                              <input
-                                type="checkbox"
-                                className="w-4 h-4 text-blue-600 border-slate-300 rounded cursor-pointer"
-                                checked={selectedEmployeeIds.includes(emp.id)}
-                                onChange={() => {}} // Controlled by row click
-                              />
-                            </td>
-                            <td className="py-2.5 px-3">
-                              <div className="flex flex-col gap-0.5">
-                                <div className="flex items-center gap-1.5 flex-wrap">
-                                  <span className="font-bold text-slate-800 text-xs">{emp.name}</span>
-                                  {hasShiftArranged && (
-                                    <span 
-                                      className="inline-flex items-center gap-0.5 text-[9px] bg-emerald-50 text-emerald-600 border border-emerald-100 rounded-full px-1.5 py-0.5 font-bold"
-                                      title="ចាត់វេនរួចរាល់ / Shift Assigned"
-                                    >
-                                      <Check size={10} strokeWidth={3} />
-                                      <span>ចាត់វេនរួច / Assigned</span>
-                                    </span>
-                                  )}
-                                </div>
-                                <span className="text-[10px] text-slate-450 font-bold uppercase">{emp.employeeIdCode || 'No ID'}</span>
-                              </div>
-                            </td>
-                            <td className="py-2.5 px-3 text-slate-500 text-xs">
-                              {emp.jobTitle || 'N/A'}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              {/* Assignment Form & Range */}
-              <div className="border border-slate-200 bg-white rounded-2xl p-6 shadow-sm h-fit">
-                <h3 className="font-extrabold text-slate-800 text-base border-b border-slate-100 pb-3 flex items-center gap-2">
-                  <Calendar size={18} className="text-emerald-500" />
-                  <span>ចាត់វេន / Arrange Shift</span>
-                </h3>
-
-                <form onSubmit={handleAssignSchedules} className="mt-4 flex flex-col gap-4">
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-slate-605 font-bold text-xs">Select Shift / ជ្រើសរើសវេន</label>
+            <div className="flex flex-col gap-6">
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+                {/* 1. Employee Explorer Panel (3 cols) */}
+                <div className="xl:col-span-3 border border-slate-200 bg-white rounded-2xl p-5 shadow-sm flex flex-col gap-4">
+                  <div>
+                    <h4 className="font-extrabold text-slate-800 text-xs uppercase tracking-wider border-b border-slate-100 pb-2 flex items-center gap-1.5">
+                      <Building2 size={14} className="text-slate-500" />
+                      <span>Departments / ផ្នែក</span>
+                    </h4>
                     <select
-                      required
-                      value={schedShiftId}
-                      onChange={(e) => setSchedShiftId(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-blue-500 focus:outline-none rounded-xl p-2.5 text-xs text-slate-800 font-semibold cursor-pointer"
+                      value={selectedDeptId}
+                      onChange={(e) => {
+                        setSelectedDeptId(e.target.value);
+                        setActiveEmployeeId(null);
+                        setSelectedEmployeeIds([]);
+                        setSelectedGroupedScheduleId(null);
+                        setSelectedTimetableId(null);
+                      }}
+                      className="w-full mt-2 bg-slate-50 border border-slate-200 hover:border-slate-350 focus:outline-none rounded-xl p-2 text-xs text-slate-800 font-bold cursor-pointer"
                     >
-                      <option value="">-- select shift --</option>
-                      {shifts.map((s) => (
-                        <option key={s.id} value={s.id}>{s.name}</option>
+                      <option value="all">All Departments / គ្រប់ផ្នែក</option>
+                      {departments.map((dept) => (
+                        <option key={dept.id} value={dept.id}>{dept.name}</option>
                       ))}
                     </select>
                   </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-slate-600 font-bold text-xs">Start Date / ថ្ងៃចាប់ផ្តើម</label>
-                    <input
-                      type="date"
-                      required
-                      value={schedStartDate}
-                      onChange={(e) => setSchedStartDate(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 hover:border-slate-350 focus:outline-none rounded-xl p-2.5 text-xs text-slate-800 font-semibold"
-                    />
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                      <h4 className="font-extrabold text-slate-800 text-xs uppercase tracking-wider flex items-center gap-1.5">
+                        <Users size={14} className="text-indigo-500" />
+                        <span>Employees / បុគ្គលិក</span>
+                      </h4>
+                      {filteredEmployees.length > 0 && (
+                        <label className="flex items-center gap-1.5 text-[10px] font-bold text-slate-550 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={filteredEmployees.length > 0 && filteredEmployees.every(emp => selectedEmployeeIds.includes(emp.id))}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                const allFilteredIds = filteredEmployees.map(emp => emp.id);
+                                setSelectedEmployeeIds(allFilteredIds);
+                                if (allFilteredIds.length > 0 && (!activeEmployeeId || !allFilteredIds.includes(activeEmployeeId))) {
+                                  setActiveEmployeeId(allFilteredIds[0]);
+                                }
+                              } else {
+                                setSelectedEmployeeIds([]);
+                                setActiveEmployeeId(null);
+                                setSelectedTimetableId(null);
+                              }
+                            }}
+                            className="w-3.5 h-3.5 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
+                          />
+                          <span>Select All</span>
+                        </label>
+                      )}
+                    </div>
+                    <div className="overflow-y-auto max-h-[350px] flex flex-col gap-1 pr-1 mt-1">
+                      {filteredEmployees.map((emp) => {
+                        const isSelected = activeEmployeeId === emp.id;
+                        const isChecked = selectedEmployeeIds.includes(emp.id);
+                        return (
+                          <div
+                            key={emp.id}
+                            onClick={() => {
+                              let newSelected = [...selectedEmployeeIds];
+                              if (isChecked) {
+                                newSelected = newSelected.filter(id => id !== emp.id);
+                              } else {
+                                newSelected.push(emp.id);
+                              }
+                              setSelectedEmployeeIds(newSelected);
+                              setActiveEmployeeId(emp.id);
+                              setSelectedGroupedScheduleId(null);
+                              setSelectedTimetableId(null);
+                            }}
+                            className={`flex items-center gap-3 p-2.5 rounded-xl cursor-pointer transition-all border ${
+                              isSelected
+                                ? 'bg-blue-50/70 border-blue-200 text-blue-800'
+                                : 'bg-white border-slate-100 hover:bg-slate-50 text-slate-700'
+                            }`}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                e.stopPropagation();
+                                const checked = e.target.checked;
+                                let newSelected = [...selectedEmployeeIds];
+                                if (checked) {
+                                  newSelected.push(emp.id);
+                                } else {
+                                  newSelected = newSelected.filter(id => id !== emp.id);
+                                }
+                                setSelectedEmployeeIds(newSelected);
+                                if (checked) {
+                                  setActiveEmployeeId(emp.id);
+                                } else if (activeEmployeeId === emp.id) {
+                                  setActiveEmployeeId(newSelected[0] || null);
+                                }
+                                setSelectedTimetableId(null);
+                              }}
+                              className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
+                            />
+                            <div className="flex-1 flex items-center justify-between min-w-0">
+                              <div className="flex flex-col min-w-0">
+                                <span className="font-bold text-xs truncate">{emp.name}</span>
+                                <span className="text-[10px] font-bold text-slate-400">{emp.employeeIdCode || 'No ID'}</span>
+                              </div>
+                              <div className="flex flex-col items-end gap-1 flex-shrink-0">
+                                <span className="text-[10px] bg-slate-100 px-2 py-0.5 rounded-full text-slate-500 font-bold truncate max-w-[80px]">
+                                  {emp.jobTitle || 'Staff'}
+                                </span>
+                                {(() => {
+                                  const hasSchedule = schedules.some(s => s.employeeId === emp.id);
+                                  const hasTimetable = emp.timetables && emp.timetables.length > 0;
+                                  if (hasSchedule && hasTimetable) {
+                                    return (
+                                      <div className="flex items-center gap-0.5 text-emerald-600 font-extrabold text-[8px] bg-emerald-50 border border-emerald-100 rounded px-1.5 py-0.2" title="Assigned / ចាត់តាំងរួច">
+                                        <Check size={8} strokeWidth={3} />
+                                        <span>Assigned</span>
+                                      </div>
+                                    );
+                                  }
+                                  return null;
+                                })()}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      {filteredEmployees.length === 0 && (
+                        <div className="text-center text-slate-400 text-xs font-semibold py-4">
+                          No employees found
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Assigned Schedules List Panel (5 cols) */}
+                <div className="xl:col-span-5 border border-slate-200 bg-white rounded-2xl p-5 shadow-sm flex flex-col">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <h3 className="font-extrabold text-slate-800 text-sm flex items-center gap-2">
+                      <Calendar size={16} className="text-blue-500" />
+                      <span>Assigned schedules list / វេនការងារចាត់តាំង</span>
+                    </h3>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => setIsAddShiftModalOpen(true)}
+                        disabled={selectedEmployeeIds.length === 0}
+                        className="p-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors cursor-pointer"
+                        title="Add Shift Assignment"
+                      >
+                        <Plus size={14} strokeWidth={2.5} />
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (selectedEmployeeIds.length === 0 || !selectedGroupedScheduleId) return;
+                          if (!activeEmployeeId) return;
+                          const groups = getGroupedSchedulesForEmployee(activeEmployeeId);
+                          const selectedGroup = groups.find(g => g.id === selectedGroupedScheduleId);
+                          if (!selectedGroup) return;
+
+                          if (confirm(`តើអ្នកពិតជាចង់លុបកាលវិភាគពី ${selectedGroup.startDate} ដល់ ${selectedGroup.endDate} របស់បុគ្គលិកទាំងអស់ដែលបានជ្រើសរើសមែនទេ? / Are you sure you want to delete this schedule period for all selected employees?`)) {
+                            try {
+                              setLoading(true);
+                              // Find matching schedules for all selected employees
+                              const matchedSchedules = schedules.filter(s => 
+                                selectedEmployeeIds.includes(s.employeeId) && 
+                                s.shiftId === selectedGroup.shiftId &&
+                                new Date(s.date).toISOString().split('T')[0] >= selectedGroup.startDate &&
+                                new Date(s.date).toISOString().split('T')[0] <= selectedGroup.endDate
+                              );
+                              const idsToDelete = matchedSchedules.map(s => s.id);
+
+                              await api.post('/schedules/bulk-delete', { ids: idsToDelete.length > 0 ? idsToDelete : selectedGroup.ids });
+                              setSelectedGroupedScheduleId(null);
+                              setSelectedTimetableId(null);
+                              fetchData();
+                            } catch (err: any) {
+                              setError(err.response?.data?.error || 'Failed to delete schedules');
+                            } finally {
+                              setLoading(false);
+                            }
+                          }
+                        }}
+                        disabled={!selectedGroupedScheduleId || selectedEmployeeIds.length === 0}
+                        className="p-1.5 bg-rose-50 text-rose-600 hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors cursor-pointer"
+                        title="Remove Shift Assignment"
+                      >
+                        <Minus size={14} strokeWidth={2.5} />
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-slate-600 font-bold text-xs">End Date / ថ្ងៃបញ្ចប់</label>
-                    <input
-                      type="date"
-                      required
-                      value={schedEndDate}
-                      onChange={(e) => setSchedEndDate(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 hover:border-slate-350 focus:outline-none rounded-xl p-2.5 text-xs text-slate-800 font-semibold"
-                    />
+                  {activeEmployeeId ? (
+                    <div className="overflow-x-auto mt-4 max-h-[420px] overflow-y-auto">
+                      <table className="min-w-full text-left border-collapse">
+                        <thead>
+                          <tr className="border-b border-slate-100 bg-slate-50/50">
+                            <th className="py-2 px-3 text-slate-500 font-bold text-[11px] uppercase">Start Date</th>
+                            <th className="py-2 px-3 text-slate-500 font-bold text-[11px] uppercase">End Date</th>
+                            <th className="py-2 px-3 text-slate-500 font-bold text-[11px] uppercase">Shift Schedule</th>
+                            <th className="py-2 px-3 text-slate-500 font-bold text-[11px] uppercase text-right">Action</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {getGroupedSchedulesForEmployee(activeEmployeeId).map((group) => {
+                            const isSelected = selectedGroupedScheduleId === group.id;
+                            return (
+                              <tr
+                                key={group.id}
+                                onClick={() => {
+                                  setSelectedGroupedScheduleId(group.id);
+                                  setSelectedTimetableId(null);
+                                }}
+                                className={`border-b border-slate-100 hover:bg-slate-50 hover:bg-slate-50/50 transition-colors cursor-pointer ${
+                                  isSelected ? 'bg-blue-50/20 text-blue-900 font-semibold' : 'text-slate-700'
+                                }`}
+                              >
+                                <td className="py-2.5 px-3 text-xs">{group.startDate}</td>
+                                <td className="py-2.5 px-3 text-xs">{group.endDate}</td>
+                                <td className="py-2.5 px-3 text-xs">
+                                  <span className="font-bold text-slate-800 bg-slate-100 px-2 py-0.5 rounded-full border border-slate-200">
+                                    {group.shiftName}
+                                  </span>
+                                </td>
+                                <td className="py-2.5 px-3 text-xs text-right" onClick={(e) => e.stopPropagation()}>
+                                  <button
+                                    onClick={() => handleOpenEditRangeModal(group)}
+                                    className="p-1 text-slate-400 hover:text-blue-600 hover:bg-slate-100 rounded-lg transition-colors cursor-pointer inline-flex items-center"
+                                    title="Edit Schedule Assignment"
+                                  >
+                                    <Edit2 size={13} />
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                          {getGroupedSchedulesForEmployee(activeEmployeeId).length === 0 && (
+                            <tr>
+                              <td colSpan={4} className="py-8 text-center text-slate-400 text-xs font-semibold">
+                                No shift schedules assigned. Click + to add.
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="h-64 flex flex-col items-center justify-center text-slate-400 gap-2 border border-dashed border-slate-200 rounded-2xl mt-4">
+                      <Users size={24} className="text-slate-300" />
+                      <span className="text-xs font-semibold">សូមជ្រើសរើសបុគ្គលិកជាមុនសិន / Select an employee first</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* 3. Used Timetable Panel (4 cols) */}
+                <div className="xl:col-span-4 border border-slate-200 bg-white rounded-2xl p-5 shadow-sm flex flex-col">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                    <h3 className="font-extrabold text-slate-800 text-sm flex items-center gap-2">
+                      <Clock size={16} className="text-indigo-500" />
+                      <span>Used timetable / ម៉ោងការងារប្រើប្រាស់</span>
+                    </h3>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => {
+                          setIsAddTimetableModalOpen(true);
+                        }}
+                        disabled={!activeEmployeeId}
+                        className="p-1.5 bg-emerald-50 text-emerald-600 hover:bg-emerald-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors cursor-pointer"
+                        title="Add Timetable to Employee"
+                      >
+                        <Plus size={14} strokeWidth={2.5} />
+                      </button>
+                      <button
+                        onClick={handleRemoveTimetableFromEmployee}
+                        disabled={!selectedTimetableId}
+                        className="p-1.5 bg-rose-50 text-rose-600 hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg transition-colors cursor-pointer"
+                        title="Remove Timetable from Employee"
+                      >
+                        <Minus size={14} strokeWidth={2.5} />
+                      </button>
+                    </div>
                   </div>
 
-                  <button
-                    type="submit"
-                    disabled={selectedEmployeeIds.length === 0}
-                    className="w-full py-2.5 px-4 bg-emerald-600 hover:bg-emerald-500 disabled:bg-slate-200 disabled:text-slate-400 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm mt-2"
-                  >
-                    <Check size={14} />
-                    <span>Arrange Shifts ({selectedEmployeeIds.length})</span>
-                  </button>
-                </form>
+                  {activeEmployeeId ? (
+                    (() => {
+                      const groupedTts: Record<string, { timetable: Timetable; daysOfWeek: number[] }> = {};
+                      employeeTimetables.forEach((et) => {
+                        if (!groupedTts[et.timetableId]) {
+                          groupedTts[et.timetableId] = {
+                            timetable: et.timetable,
+                            daysOfWeek: []
+                          };
+                        }
+                        groupedTts[et.timetableId].daysOfWeek.push(et.dayOfWeek);
+                      });
+
+                      const uniqueTimetables = Object.values(groupedTts);
+
+                      if (uniqueTimetables.length === 0) {
+                        return (
+                          <div className="h-64 flex flex-col items-center justify-center text-slate-400 gap-2 border border-dashed border-slate-200 rounded-2xl mt-4">
+                            <Clock size={24} className="text-slate-300" />
+                            <span className="text-xs font-semibold">មិនទាន់មានម៉ោងការងារប្រើប្រាស់នៅឡើយទេ / No timetables assigned</span>
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <div className="flex flex-col gap-4 mt-4 max-h-[420px] overflow-y-auto">
+                          <div className="flex flex-col gap-2">
+                            {uniqueTimetables.map(({ timetable: tt, daysOfWeek }) => {
+                              const isSelected = selectedTimetableId === tt.id;
+                              const dayLabels: Record<number, string> = {
+                                1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat', 0: 'Sun'
+                              };
+                              const sortedDays = [...daysOfWeek].sort((a, b) => a - b);
+                              const daysAssigned = sortedDays.map(d => dayLabels[d] || String(d));
+
+                              return (
+                                <div
+                                  key={tt.id}
+                                  onClick={() => {
+                                    setSelectedTimetableId(tt.id);
+                                  }}
+                                  className={`p-3 border rounded-xl flex flex-col gap-1.5 transition-all cursor-pointer bg-white ${
+                                    isSelected
+                                      ? 'border-blue-500 bg-blue-50/20 text-blue-900 font-semibold'
+                                      : 'border-slate-100 hover:bg-slate-50 text-slate-700'
+                                  }`}
+                                >
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-2">
+                                      <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: tt.color }} />
+                                      <span className="font-bold text-xs">{tt.name}</span>
+                                    </div>
+                                    <span className="text-[10px] font-black bg-slate-100 px-2 py-0.5 rounded text-slate-655">
+                                      {tt.onDutyTime} - {tt.offDutyTime}
+                                    </span>
+                                  </div>
+                                  <div className="text-[9px] font-bold text-slate-400 uppercase tracking-tight flex items-center gap-1">
+                                    <span>Days:</span>
+                                    <div className="flex flex-wrap gap-0.5">
+                                      {daysAssigned.map((d, i) => (
+                                        <span key={i} className="bg-slate-50 text-slate-600 px-1 py-0.2 rounded border border-slate-100 font-extrabold text-[8px]">
+                                          {d}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <div className="h-64 flex flex-col items-center justify-center text-slate-400 gap-2 border border-dashed border-slate-200 rounded-2xl mt-4">
+                      <Clock size={24} className="text-slate-300" />
+                      <span className="text-xs font-semibold">សូមជ្រើសរើសបុគ្គលិកជាមុនសិន / Select an employee first</span>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -1574,6 +1906,272 @@ export default function Schedules() {
                   className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
                 >
                   កែប្រែទាំងអស់ / Update All
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add Shift Modal */}
+      {isAddShiftModalOpen && selectedEmployeeIds.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm transition-all">
+          <div className="bg-white rounded-2xl p-6 shadow-xl border border-slate-100 max-w-md w-full flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-extrabold text-slate-800 text-base">
+                ចាត់វេនការងារថ្មី / Assign New Shift Schedule
+              </h3>
+              <button 
+                onClick={() => setIsAddShiftModalOpen(false)}
+                className="text-slate-400 hover:text-slate-650 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={async (e) => {
+              e.preventDefault();
+              if (!schedShiftId) return;
+              try {
+                setLoading(true);
+                setError('');
+                await Promise.all(selectedEmployeeIds.map(empId =>
+                  api.post('/schedules', {
+                    employeeId: empId,
+                    shiftId: schedShiftId,
+                    startDate: schedStartDate,
+                    endDate: schedEndDate
+                  })
+                ));
+                setIsAddShiftModalOpen(false);
+                fetchData();
+              } catch (err: any) {
+                setError(err.response?.data?.error || 'Failed to assign shift schedule');
+              } finally {
+                setLoading(false);
+              }
+            }} className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] font-bold text-slate-400 uppercase">Employee / បុគ្គលិក</span>
+                <span className="text-xs font-bold text-slate-800 bg-slate-50 p-2.5 rounded-xl border border-slate-100 max-h-24 overflow-y-auto">
+                  {selectedEmployeeIds.map(empId => employees.find(e => e.id === empId)?.name).filter(Boolean).join(', ')}
+                </span>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-slate-600 font-bold text-xs">Select Shift / ជ្រើសរើសវេន</label>
+                <select
+                  required
+                  value={schedShiftId}
+                  onChange={(e) => setSchedShiftId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-blue-500 focus:outline-none rounded-xl p-2.5 text-xs text-slate-800 font-semibold cursor-pointer"
+                >
+                  <option value="">-- select shift --</option>
+                  {shifts.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-slate-600 font-bold text-xs">Start Date / ថ្ងៃចាប់ផ្តើម</label>
+                <input
+                  type="date"
+                  required
+                  value={schedStartDate}
+                  onChange={(e) => setSchedStartDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 hover:border-slate-350 focus:outline-none rounded-xl p-2.5 text-xs text-slate-800 font-semibold"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-slate-600 font-bold text-xs">End Date / ថ្ងៃបញ្ចប់</label>
+                <input
+                  type="date"
+                  required
+                  value={schedEndDate}
+                  onChange={(e) => setSchedEndDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 hover:border-slate-350 focus:outline-none rounded-xl p-2.5 text-xs text-slate-800 font-semibold"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 border-t border-slate-100 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setIsAddShiftModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-655 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  បោះបង់ / Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  ចាត់វេន / Arrange Shift
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Add Timetable Modal */}
+      {isAddTimetableModalOpen && activeEmployeeId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm transition-all">
+          <div className="bg-white rounded-2xl p-6 shadow-xl border border-slate-100 max-w-md w-full flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-extrabold text-slate-800 text-base">
+                បន្ថែមពេលវេលាទៅបុគ្គលិក / Add Timetable to Employee
+              </h3>
+              <button 
+                onClick={() => setIsAddTimetableModalOpen(false)}
+                className="text-slate-400 hover:text-slate-655 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleAddTimetableToEmployee} className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1.5">
+                <label className="text-slate-600 font-bold text-xs">Select Timetable / ជ្រើសរើសម៉ោងការងារ</label>
+                <select
+                  required
+                  value={addTtId}
+                  onChange={(e) => setAddTtId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 hover:border-slate-350 focus:outline-none rounded-xl p-2.5 text-xs text-slate-800 font-semibold cursor-pointer"
+                >
+                  <option value="">-- select timetable --</option>
+                  {timetables.map((tt) => (
+                    <option key={tt.id} value={tt.id}>{tt.name} ({tt.onDutyTime} - {tt.offDutyTime})</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-slate-600 font-bold text-xs">Select Days of Week / ជ្រើសរើសថ្ងៃក្នុងសប្តាហ៍</label>
+                <div className="grid grid-cols-2 gap-2 mt-1">
+                  {[
+                    { label: 'Monday / ចន្ទ', value: 1 },
+                    { label: 'Tuesday / អង្គារ', value: 2 },
+                    { label: 'Wednesday / ពុធ', value: 3 },
+                    { label: 'Thursday / ព្រហស្បតិ៍', value: 4 },
+                    { label: 'Friday / សុក្រ', value: 5 },
+                    { label: 'Saturday / សៅរ៍', value: 6 },
+                    { label: 'Sunday / អាទិត្យ', value: 0 }
+                  ].map((day) => (
+                    <label key={day.value} className="flex items-center gap-2 text-slate-700 font-semibold text-xs cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={addTtDays.includes(day.value)}
+                        onChange={(e) => {
+                          if (e.target.checked) {
+                            setAddTtDays(prev => [...prev, day.value]);
+                          } else {
+                            setAddTtDays(prev => prev.filter(v => v !== day.value));
+                          }
+                        }}
+                        className="w-4 h-4 text-blue-600 border-slate-300 rounded focus:ring-blue-500 cursor-pointer"
+                      />
+                      <span>{day.label}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 border-t border-slate-100 pt-3">
+                <button
+                  type="button"
+                  onClick={() => setIsAddTimetableModalOpen(false)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-655 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  បោះបង់ / Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  បន្ថែម / Add Timetable
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Edit Shift Schedule Assignment Modal */}
+      {isEditRangeModalOpen && editRangeGroup && selectedEmployeeIds.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm transition-all">
+          <div className="bg-white rounded-2xl p-6 shadow-xl border border-slate-100 max-w-md w-full flex flex-col gap-4 animate-in fade-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <h3 className="font-extrabold text-slate-800 text-base">
+                កែប្រែវេនការងារចាត់តាំង / Edit Shift Schedule Assignment
+              </h3>
+              <button 
+                onClick={() => { setIsEditRangeModalOpen(false); setEditRangeGroup(null); }}
+                className="text-slate-400 hover:text-slate-655 cursor-pointer p-1 rounded-lg hover:bg-slate-100 transition-colors"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEditRange} className="flex flex-col gap-4">
+              <div className="flex flex-col gap-1">
+                <span className="text-[11px] font-bold text-slate-400 uppercase">Employee / បុគ្គលិក</span>
+                <span className="text-xs font-bold text-slate-800 bg-slate-50 p-2.5 rounded-xl border border-slate-100 max-h-24 overflow-y-auto">
+                  {selectedEmployeeIds.map(empId => employees.find(e => e.id === empId)?.name).filter(Boolean).join(', ')}
+                </span>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-slate-600 font-bold text-xs">Select Shift / ជ្រើសរើសវេន</label>
+                <select
+                  required
+                  value={editRangeShiftId}
+                  onChange={(e) => setEditRangeShiftId(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-blue-500 focus:outline-none rounded-xl p-2.5 text-xs text-slate-800 font-semibold cursor-pointer"
+                >
+                  <option value="">-- select shift --</option>
+                  {shifts.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-slate-600 font-bold text-xs">Start Date / ថ្ងៃចាប់ផ្តើម</label>
+                <input
+                  type="date"
+                  required
+                  value={editRangeStartDate}
+                  onChange={(e) => setEditRangeStartDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 hover:border-slate-350 focus:outline-none rounded-xl p-2.5 text-xs text-slate-800 font-semibold"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-slate-600 font-bold text-xs">End Date / ថ្ងៃបញ្ចប់</label>
+                <input
+                  type="date"
+                  required
+                  value={editRangeEndDate}
+                  onChange={(e) => setEditRangeEndDate(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 hover:border-slate-350 focus:outline-none rounded-xl p-2.5 text-xs text-slate-800 font-semibold"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 border-t border-slate-100 pt-3">
+                <button
+                  type="button"
+                  onClick={() => { setIsEditRangeModalOpen(false); setEditRangeGroup(null); }}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-655 rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  បោះបង់ / Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold transition-all cursor-pointer"
+                >
+                  រក្សាទុក / Save Changes
                 </button>
               </div>
             </form>

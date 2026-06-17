@@ -192,6 +192,8 @@ export default function Employees() {
 
   // Directory Search and Department Filter Logic
   const filteredEmployees = employees.filter((emp) => {
+    if (emp.role !== 'EMPLOYEE') return false;
+
     const term = searchTerm.toLowerCase();
     const matchesSearch = 
       emp.name.toLowerCase().includes(term) ||
@@ -205,10 +207,11 @@ export default function Employees() {
     return matchesSearch && matchesDept;
   });
 
-  // Directory Statistics (Computed over entire database array)
-  const totalCount = employees.length;
-  const maleCount = employees.filter(e => e.gender === 'Male').length;
-  const femaleCount = employees.filter(e => e.gender === 'Female').length;
+  // Directory Statistics (Computed over EMPLOYEE role only)
+  const employeeList = employees.filter(e => e.role === 'EMPLOYEE');
+  const totalCount = employeeList.length;
+  const maleCount = employeeList.filter(e => e.gender === 'Male').length;
+  const femaleCount = employeeList.filter(e => e.gender === 'Female').length;
 
   // Pagination calculations
   const totalPages = Math.ceil(filteredEmployees.length / itemsPerPage);
@@ -632,15 +635,10 @@ export default function Employees() {
                 </div>
 
                 <div className="flex flex-col gap-1.5">
-                  <label className="text-slate-600 font-bold text-xs">សិទ្ធិប្រព័ន្ធ / Privilege <span className="text-rose-500">*</span></label>
-                  <select 
-                    value={role} 
-                    onChange={(e) => setRole(e.target.value as 'ADMIN' | 'EMPLOYEE')}
-                    className="w-full bg-slate-50 border border-slate-200 hover:border-slate-300 focus:border-blue-500 focus:outline-none rounded-xl p-2.5 text-xs text-slate-800 font-semibold cursor-pointer"
-                  >
-                    <option value="EMPLOYEE">EMPLOYEE</option>
-                    <option value="ADMIN">ADMIN</option>
-                  </select>
+                  <label className="text-slate-600 font-bold text-xs">សិទ្ធិប្រព័ន្ធ / Privilege</label>
+                  <div className="w-full bg-slate-100 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-600 font-bold">
+                    EMPLOYEE (សម្រាប់ស្កែនវត្តមានទូរស័ព្ទ)
+                  </div>
                 </div>
 
                 <div className="flex flex-col gap-1.5">
